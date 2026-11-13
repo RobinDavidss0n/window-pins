@@ -1,0 +1,12 @@
+// Only for the nested test shell: lets tests evaluate JS in the shell.
+import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
+
+export default class TestHelper extends Extension {
+    enable() {
+        global.context.unsafe_mode = true;
+    }
+
+    disable() {
+        global.context.unsafe_mode = false;
+    }
+}
