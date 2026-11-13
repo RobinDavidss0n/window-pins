@@ -1,0 +1,7 @@
+{
+  "uuid": "wp-test-helper@local",
+  "name": "window-pins test helper",
+  "description": "Turns on unsafe mode in a nested test shell so tests can use org.gnome.Shell.Eval.",
+  "shell-version": ["50"],
+  "session-modes": ["user", "unlock-dialog"]
+}
