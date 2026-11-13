@@ -1,6 +1,7 @@
 // Window Pins: puts windows back where they were for each monitor setup,
 // and places pinned windows on their pins.
 
+import Gio from 'gi://Gio';
 import Meta from 'gi://Meta';
 import Shell from 'gi://Shell';
 
@@ -58,7 +59,7 @@ export default class WindowPinsExtension extends Extension {
         Main.wm.addKeybinding(KEYBINDING, this._settings,
             Meta.KeyBindingFlags.IGNORE_AUTOREPEAT,
             Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW,
-            () => this._pinFocused());
+            () => this._pinFromShortcut());
     }
 
     _removeUi() {
@@ -69,10 +70,21 @@ export default class WindowPinsExtension extends Extension {
         this._indicator = null;
     }
 
+    /** @returns {{win: Meta.Window|null, result: object|null}} */
     _pinFocused() {
         const win = this._engine.focusedWindow();
-        const pin = this._engine.pinWindow(win);
-        if (!pin)
+        const result = this._engine.pinWindow(win);
+        if (!result)
             this._logger.debug('pin: no app window to pin, or the monitor layout is changing');
+        return {win, result};
+    }
+
+    // The shortcut gives no other sign that it worked, so it shows an
+    // OSD on the window's monitor (or the current one).
+    _pinFromShortcut() {
+        const {win, result} = this._pinFocused();
+        const label = !result ? "Can't pin this window" : result.moved ? 'Pin moved' : 'Pinned';
+        const monitor = result ? win.get_monitor() : global.display.get_current_monitor();
+        Main.osdWindowManager.showOne(monitor, Gio.ThemedIcon.new('view-pin-symbolic'), label, null);
     }
 }

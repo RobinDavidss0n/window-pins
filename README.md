@@ -67,7 +67,7 @@ The pin icon in the top bar opens the menu:
   windows and apps already switched on.
 
 The shortcut **Super+Ctrl+P** pins the focused window here, like the menu
-item.
+item, and briefly shows "Pinned", "Pin moved" or "Can't pin this window".
 
 ### How windows are placed
 

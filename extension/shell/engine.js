@@ -504,7 +504,8 @@ export class Engine {
      * already holds a pin in this setup moves that pin instead of getting
      * a second one.
      *
-     * @returns {object|null} the pin, or null when the window cannot be pinned
+     * @returns {{pin: object, moved: boolean}|null} the pin, and whether an
+     *   existing pin was moved; null when the window cannot be pinned
      */
     pinWindow(win) {
         if (!win || this._settler.settling || !isTrackable(win))
@@ -531,6 +532,7 @@ export class Engine {
         const now = Date.now();
         const fields = {wmClass, appName: appNameOf(win), title: win.get_title() ?? '', ...spot};
         let pin = this._state.pins.find(p => p.id === mem.pins[setupKey]);
+        const moved = Boolean(pin);
         if (pin) {
             Object.assign(pin, fields);
         } else {
@@ -542,10 +544,10 @@ export class Engine {
             mem.pins[setupKey] = pin.id;
         }
         mem.spots[setupKey] = {...spot, at: now};
-        this._log.debug(`pinned ${describeWindow(win)} at ${describeSpot(spot, this._layout)} ` +
-            `in setup "${this.currentSetup.name}"`);
+        this._log.debug(`${moved ? 'moved the pin of' : 'pinned'} ${describeWindow(win)} at ` +
+            `${describeSpot(spot, this._layout)} in setup "${this.currentSetup.name}"`);
         this._saveNow();
-        return pin;
+        return {pin, moved};
     }
 
     removePin(id) {

@@ -82,11 +82,16 @@ close_win() { with_win "$1" "w.delete(global.get_current_time()); return 'ok'" >
 pin() {
     with_win "$1" "w.activate(global.get_current_time()); return 'ok'" > /dev/null
     sleep 0.3
-    ev "$ENGINE.pinWindow($ENGINE.focusedWindow())?.title ?? 'none'"
+    ev "$ENGINE.pinWindow($ENGINE.focusedWindow())?.pin.title ?? 'none'"
 }
 # Pin a window without going through focus (activating a window on
 # another workspace switches workspaces first).
-pin_window() { with_win "$1" "return $ENGINE.pinWindow(w)?.title ?? 'none'"; }
+pin_window() { with_win "$1" "return $ENGINE.pinWindow(w)?.pin.title ?? 'none'"; }
+EXT="Main.extensionManager.lookup('$WP_UUID').stateObj"
+# Text of the OSD shown on a monitor, or "hidden".
+osd_text() {
+    ev "(() => { const o = Main.osdWindowManager._osdWindows[$1]; return o.visible ? o._label.text : 'hidden'; })()"
+}
 setup_name() { ev "$ENGINE.currentSetup.name"; }
 
 step "open two windows of one app; nothing is pinned, so they stay where GNOME put them"
@@ -255,6 +260,20 @@ print("   pins:", [(p["wmClass"], p["title"]) for p in s["pins"]])
 print("   remember:", list(s["remember"]), "closed:", {k: len(v) for k, v in s["closed"].items()})
 print("   open windows:", len(s["openWindows"]))
 ' "$state" || fails=$((fails + 1))
+
+step "the shortcut's action shows an OSD: pinned, pin moved, can't pin"
+with_win "Alpha one" "w.activate(global.get_current_time()); return 'ok'" > /dev/null
+sleep 0.5
+ev "$EXT._pinFromShortcut()" > /dev/null
+expect_eq "OSD after pinning" "$(osd_text 1)" '"Pinned"'
+sleep 2.5
+ev "$EXT._pinFromShortcut()" > /dev/null
+expect_eq "OSD after pinning again" "$(osd_text 1)" '"Pin moved"'
+sleep 2.5
+ev "global.display.unset_input_focus(global.get_current_time()); $ENGINE._lastFocusedKey = null" > /dev/null
+ev "$EXT._pinFromShortcut()" > /dev/null
+expect_eq "OSD without a window to pin" "$(osd_text "$(ev 'global.display.get_current_monitor()')")" "\"Can't pin this window\""
+ev "$ENGINE.removePin($ENGINE.pinsFor($ENGINE.currentSetup.key).find(p => p.title === 'Alpha one').id)" > /dev/null
 
 step "shell restart (like logout or reboot) with a remembered app's window still open"
 move "Gamma other" 2300 500 450 300
