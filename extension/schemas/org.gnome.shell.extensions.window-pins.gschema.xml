@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.window-pins"
+          path="/org/gnome/shell/extensions/window-pins/">
+    <key name="pin-window" type="as">
+      <default><![CDATA[['<Super><Control>p']]]></default>
+      <summary>Pin the focused window here</summary>
+      <description>Pins the focused window at its current place for the current monitor setup.</description>
+    </key>
+    <key name="debug" type="b">
+      <default>false</default>
+      <summary>Log decisions to the journal</summary>
+      <description>Logs setup changes and which window was moved where and why, with a [window-pins] prefix.</description>
+    </key>
+  </schema>
+</schemalist>

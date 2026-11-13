@@ -1,0 +1,15 @@
+{
+  "uuid": "window-pins@robindavidss0n.github.io",
+  "name": "Window Pins",
+  "description": "Puts windows back where they were when you switch between monitor setups (docking, undocking, home and office), and pins app windows to fixed places per setup. Monitors are recognised by their model and serial, not by the port they are plugged into.",
+  "shell-version": [
+    "50"
+  ],
+  "session-modes": [
+    "user",
+    "unlock-dialog"
+  ],
+  "settings-schema": "org.gnome.shell.extensions.window-pins",
+  "url": "https://github.com/RobinDavidss0n/window-pins",
+  "version-name": "0.1"
+}
