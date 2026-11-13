@@ -242,6 +242,18 @@ echo "   menu: $labels"
 [[ $labels == *'Alpha two'* && $labels == *'Pin this window here'* && $labels == *'Remember closed windows'* ]] &&
     echo "   ok: menu content" || { echo "   FAIL: menu content"; fails=$((fails + 1)); }
 
+# The pin item names the focused window, as of when the menu opens.
+pin_item_text() {
+    ev "(() => { const i = Main.panel.statusArea['$WP_UUID']; i.menu.open(false);
+      const t = i._pinItem.label.text; i.menu.close(false); return t; })()"
+}
+with_win "Alpha one" "w.activate(global.get_current_time()); return 'ok'" > /dev/null
+sleep 0.5
+expect_eq "pin item names the focused window" "$(pin_item_text)" '"Pin this window here (Alpha one)"'
+with_win "Alpha three" "w.activate(global.get_current_time()); return 'ok'" > /dev/null
+sleep 0.5
+expect_eq "pin item follows the focus" "$(pin_item_text)" '"Pin this window here (Alpha three)"'
+
 step "rename the setup, give it back its default name, remove a pin"
 ev "$ENGINE.renameSetup($ENGINE.currentSetup.key, 'Office')" > /dev/null
 expect_eq "renamed" "$(setup_name)" '"Office"'

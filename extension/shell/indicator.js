@@ -127,8 +127,14 @@ class Indicator extends PanelMenu.Button {
         const setup = this._engine.currentSetup;
         this._nameItem.setSetup(setup.key, setup.name);
 
+        // Name the window it acts on: the panel takes the focus away, so
+        // it is not obvious which window counts as focused.
         const focused = this._engine.focusedWindow();
         this._pinItem.setSensitive(Boolean(focused) && !this._engine.settling);
+        const title = shorten(focused?.get_title() ?? '', 30);
+        this._pinItem.label.text = title
+            ? `Pin this window here (${title})`
+            : 'Pin this window here';
 
         this._pinsSection.removeAll();
         const pins = this._engine.pinsFor(setup.key);
