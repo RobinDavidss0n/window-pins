@@ -10,7 +10,7 @@ import {assignPins, chooseClosedSpot, decideNewWindow, planRestore}
     from '../extension/lib/matching.js';
 import {MonitorSettler, QuietTimer} from '../extension/lib/timing.js';
 import {
-    CLOSED_MAX_AGE_MS, addClosedEntries, emptyState, heldPinIds, newPinId,
+    CLOSED_MAX_AGE_MS, addClosedEntries, closeStaleOpenWindows, emptyState, heldPinIds, newPinId,
     normalizeState, pruneState,
 } from '../extension/lib/state.js';
 
@@ -384,6 +384,33 @@ test('closed entries: one per title and setup, newest kept', () => {
     eq(list.length, 3);
     eq(list.filter(e => e.setupKey === 'S' && e.title === 'Mail').map(e => e.monitor), ['m3']);
     eq('at' in list[0], false);
+});
+
+test('open windows of an earlier shell become closed windows for remembered apps', () => {
+    const state = emptyState();
+    state.remember = {obsidian: {appName: 'Obsidian'}};
+    state.closed = {obsidian: [
+        {title: 'Vault', setupKey: 'S', closedAt: 50, ...spot('older')},
+        {title: 'Notes', setupKey: 'S', closedAt: 900, ...spot('newer')},
+    ]};
+    state.openWindows = {
+        5: {wmClass: 'obsidian', title: 'Vault', lastSeen: 100,
+            spots: {S: {...spot('m1'), at: 90}, T: {...spot('m2'), at: 120}}, pins: {}},
+        6: {wmClass: 'obsidian', title: 'Notes', lastSeen: 500, spots: {S: spot('stale')}, pins: {}},
+        7: {wmClass: 'chrome', title: 'Mail', lastSeen: 100, spots: {S: spot('c')}, pins: {}},
+        8: {wmClass: 'obsidian', title: 'Empty', lastSeen: 100, spots: {}, pins: {}},
+    };
+    closeStaleOpenWindows(state, 1000);
+    eq(state.openWindows, {});
+    eq(state.closed.chrome, undefined);
+    const byKey = Object.fromEntries(state.closed.obsidian.map(e => [`${e.title}/${e.setupKey}`, e]));
+    // Replaces the older closed entry; time is the latest it was seen.
+    eq([byKey['Vault/S'].monitor, byKey['Vault/S'].closedAt], ['m1', 120]);
+    eq([byKey['Vault/T'].monitor, byKey['Vault/T'].closedAt], ['m2', 120]);
+    // A newer closed entry with the same title wins over an older open one.
+    eq(byKey['Notes/S'].monitor, 'newer');
+    eq(byKey['Empty/S'], undefined);
+    eq(chooseClosedSpot(state.closed.obsidian, 'Vault', 'S').monitor, 'm1');
 });
 
 test('held pins exclude the asking window and dead windows', () => {

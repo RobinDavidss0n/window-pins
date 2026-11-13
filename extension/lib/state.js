@@ -240,12 +240,36 @@ export function addClosedEntries(state, wmClass, title, spots, now) {
     const t = title ?? '';
     for (const [setupKey, spot] of Object.entries(spots)) {
         const i = list.findIndex(e => e.setupKey === setupKey && e.title === t);
-        if (i >= 0)
+        if (i >= 0) {
+            if (list[i].closedAt > now)
+                continue;
             list.splice(i, 1);
+        }
         list.push({title: t, setupKey, ...spotOf(spot), closedAt: now});
     }
     if (list.length)
         state.closed[wmClass] = list;
+}
+
+/**
+ * Turn the remembered open windows of an earlier gnome-shell process into
+ * closed windows, for apps with "remember closed windows" on, and forget
+ * them as open windows. Windows still open at logout or reboot are never
+ * seen closing (the extension is disabled first), so without this they
+ * would leave no spot behind. Their last-seen time counts as the time
+ * they closed.
+ *
+ * @param {object} state modified in place
+ * @param {number} now used when a window has no last-seen time
+ */
+export function closeStaleOpenWindows(state, now) {
+    for (const w of Object.values(state.openWindows)) {
+        if (!w.wmClass || !state.remember[w.wmClass] || !Object.keys(w.spots).length)
+            continue;
+        const seen = Math.max(w.lastSeen, ...Object.values(w.spots).map(s => s.at ?? 0));
+        addClosedEntries(state, w.wmClass, w.title, w.spots, seen > 0 ? seen : now);
+    }
+    state.openWindows = {};
 }
 
 /**

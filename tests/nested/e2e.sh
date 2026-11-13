@@ -14,19 +14,25 @@ work=${1:-$(mktemp -d)}
 rm -rf "$work"
 mkdir -p "$work"
 
-WP_SECOND_MONITOR=1280x1024 "$here/session.sh" "$work" &
-session=$!
-# shellcheck source=lib.sh
-source "$here/lib.sh" "$work"
+start_session() {
+    rm -f "$work/bus"
+    WP_SECOND_MONITOR=1280x1024 "$here/session.sh" "$work" &
+    session=$!
+}
 
 pids=()
-cleanup() {
+stop_session() {
     for p in "${pids[@]}"; do kill "$p" 2> /dev/null; done
+    pids=()
     pkill -P "$session" 2> /dev/null
     kill "$session" 2> /dev/null
     wait 2> /dev/null
 }
-trap cleanup EXIT
+trap stop_session EXIT
+
+start_session
+# shellcheck source=lib.sh
+source "$here/lib.sh" "$work"
 
 wp_wait_shell || exit 1
 
@@ -249,6 +255,23 @@ print("   pins:", [(p["wmClass"], p["title"]) for p in s["pins"]])
 print("   remember:", list(s["remember"]), "closed:", {k: len(v) for k, v in s["closed"].items()})
 print("   open windows:", len(s["openWindows"]))
 ' "$state" || fails=$((fails + 1))
+
+step "shell restart (like logout or reboot) with a remembered app's window still open"
+move "Gamma other" 2300 500 450 300
+sleep 3.5 # recorded and saved
+stop_session
+open_after_stop=$(python3 -I -c '
+import json, sys
+s = json.load(open(sys.argv[1]))
+print(sum(1 for w in s["openWindows"].values() if w["title"] == "Gamma other"))
+' "$state")
+echo "   (\"Gamma other\" still among open windows in the saved state: $open_after_stop)"
+mv "$work/shell.log" "$work/shell-1.log"
+start_session
+wp_wait_shell || exit 1
+pids+=("$(open_app org.example.Gamma 'Gamma other')")
+settle
+expect_win "Gamma other" 1 2300 500 450 300
 
 echo
 echo "journal (debug log):"

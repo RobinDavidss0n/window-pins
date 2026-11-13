@@ -10,7 +10,7 @@ import GLib from 'gi://GLib';
 import {decideNewWindow, planRestore} from '../lib/matching.js';
 import {defaultSetupName} from '../lib/setup.js';
 import {
-    addClosedEntries, heldPinIds, newPinId, normalizeState, pruneState,
+    addClosedEntries, closeStaleOpenWindows, heldPinIds, newPinId, normalizeState, pruneState,
 } from '../lib/state.js';
 import {
     MonitorSettler, QuietTimer, RECORD_DEBOUNCE_MS, SAVE_DEBOUNCE_MS,
@@ -76,8 +76,10 @@ export class Engine {
         const instance = shellInstanceId();
         this._state = normalizeState(this._store.load());
         const sameInstance = this._state.shellInstance === instance;
+        // Windows of an earlier shell process (before logout or reboot)
+        // are gone; their sequence numbers mean nothing now.
         if (!sameInstance)
-            this._state.openWindows = {};
+            closeStaleOpenWindows(this._state, Date.now());
         this._state.shellInstance = instance;
         const previousKey = this._state.lastSetupKey;
 
