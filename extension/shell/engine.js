@@ -51,6 +51,8 @@ function describeWindow(win) {
  *   yet and not placed; tracked: placed (or left alone) and recorded
  * @property {boolean} ready waiting window whose title settled while the
  *   monitor layout was changing
+ * @property {boolean} grabbed the user moved or resized it before it was
+ *   placed
  * @property {QuietTimer|null} waiter
  * @property {QuietTimer} recordTimer
  * @property {number[]} signalIds
@@ -114,6 +116,13 @@ export class Engine {
         this._connect(global.display, 'workareas-changed', () => {
             if (!this._settler.settling)
                 refreshWorkAreas(this._layout);
+        });
+        // A new window the user starts moving or resizing before it is
+        // placed stays where the user puts it.
+        this._connect(global.display, 'grab-op-begin', (_d, win) => {
+            const entry = win ? this._windows.get(windowKey(win)) : null;
+            if (entry?.phase === 'waiting')
+                entry.grabbed = true;
         });
         this._connect(global.display, 'notify::focus-window', () => {
             const win = global.display.focus_window;
@@ -180,7 +189,7 @@ export class Engine {
 
         /** @type {Entry} */
         const entry = {
-            win, key, phase, ready: false, waiter: null, shownId: 0,
+            win, key, phase, ready: false, grabbed: false, waiter: null, shownId: 0,
         };
         entry.recordTimer = new QuietTimer(timers, {
             quiet: RECORD_DEBOUNCE_MS,
@@ -379,6 +388,13 @@ export class Engine {
         }
         entry.phase = 'tracked';
         entry.waiter = null;
+
+        if (entry.grabbed) {
+            this._log.debug(`new ${describeWindow(win)}: left alone, the user moved or resized it first`);
+            this._recordSoon(entry);
+            this._saveSoon();
+            return;
+        }
 
         const setupKey = this._layout.key;
         const wmClass = win.get_wm_class();

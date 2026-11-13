@@ -96,6 +96,9 @@ extensions have placed it first. Then:
    otherwise of the app's most recently closed window in this setup.
 4. Otherwise it stays where it opened.
 
+A window you start moving or resizing before it is placed is left where
+you put it.
+
 Only normal app windows are placed: dialogs, windows that skip the
 taskbar, popups and the desktop icons window are ignored.
 

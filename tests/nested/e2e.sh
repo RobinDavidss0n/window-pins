@@ -259,6 +259,21 @@ print("   open windows:", len(s["openWindows"]))
 step "shell restart (like logout or reboot) with a remembered app's window still open"
 move "Gamma other" 2300 500 450 300
 sleep 3.5 # recorded and saved
+
+# A real grab (Meta.Window.begin_grab_op) crashes the headless shell,
+# which has no pointer, so the signal Mutter emits for one is emitted
+# by hand.
+step "a new window the user grabs before it is placed is left alone, even with a matching pin"
+close_win "Alpha two"
+sleep 1
+pids+=("$(open_app org.example.Alpha 'Alpha two')")
+sleep 0.5
+with_win "Alpha two" "global.display.emit('grab-op-begin', w, imports.gi.Meta.GrabOp.MOVING); return 'ok'" > /dev/null
+settle
+grep -a -q 'new org.example.Alpha "Alpha two" .*left alone, the user moved or resized it first' "$work/shell.log" &&
+    echo "   ok: grabbed window left alone" || { echo "   FAIL: grabbed window was placed"; fails=$((fails + 1)); }
+expect_eq "Alpha two not on its pin" "$(with_win 'Alpha two' 'return String(w.get_monitor())')" '"0"'
+
 stop_session
 open_after_stop=$(python3 -I -c '
 import json, sys
