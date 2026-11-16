@@ -4,7 +4,7 @@ import system from 'system';
 
 import {assignMonitorIds, defaultSetupName, logicalMonitorId, monitorBaseId, setupKeyOf}
     from '../extension/lib/setup.js';
-import {sameRect, toAbsolute, toRelative} from '../extension/lib/geometry.js';
+import {landedAt, sameRect, toAbsolute, toRelative} from '../extension/lib/geometry.js';
 import {isAppWindow} from '../extension/lib/filter.js';
 import {assignPins, chooseClosedSpot, decideNewWindow, planRestore}
     from '../extension/lib/matching.js';
@@ -148,6 +148,13 @@ test('other area size scales and clamps', () => {
 test('sameRect tolerance', () => {
     eq(sameRect({x: 0, y: 0, width: 10, height: 10}, {x: 2, y: -2, width: 12, height: 8}), true);
     eq(sameRect({x: 0, y: 0, width: 10, height: 10}, {x: 3, y: 0, width: 10, height: 10}), false);
+});
+
+test('landedAt: exact position, size rounded to character cells', () => {
+    const target = {x: 1920, y: 0, width: 640, height: 1024};
+    eq(landedAt({x: 1920, y: 0, width: 630, height: 1020}, target), true);
+    eq(landedAt({x: 1925, y: 0, width: 640, height: 1024}, target), false);
+    eq(landedAt({x: 1920, y: 0, width: 400, height: 1024}, target), false);
 });
 
 // --- filter.js --------------------------------------------------------------

@@ -67,6 +67,18 @@ with_win() {
 # The extension's engine in the nested shell.
 ENGINE="Main.extensionManager.lookup('$WP_UUID').stateObj._engine"
 
+# Press Super+KEY (a Clutter key name such as Left) on a virtual keyboard,
+# so GNOME's own keybindings run, e.g. edge tiling.
+super_key() {
+    ev "(() => { const C = imports.gi.Clutter;
+      globalThis.wpKeyboard ??= C.get_default_backend().get_default_seat()
+          .create_virtual_device(C.InputDeviceType.KEYBOARD_DEVICE);
+      const t = () => imports.gi.GLib.get_monotonic_time();
+      for (const [key, state] of [[C.KEY_Super_L, 1], [C.KEY_$1, 1], [C.KEY_$1, 0], [C.KEY_Super_L, 0]])
+          wpKeyboard.notify_keyval(t(), key, state ? C.KeyState.PRESSED : C.KeyState.RELEASED);
+      return 'ok'; })()" > /dev/null
+}
+
 open_app() {
     gjs -m "$WP_HERE/win.js" "$@" > /dev/null 2>&1 &
     echo $!

@@ -19,7 +19,7 @@ import {
 import {readLayout, refreshWorkAreas} from './monitors.js';
 import {shellInstanceId} from './store.js';
 import {
-    applySpot, appNameOf, describeSpot, isTrackable, readSpot, windowKey,
+    applySpot, appNameOf, cancelPendingPlacements, describeSpot, isTrackable, readSpot, windowKey,
 } from './windows.js';
 
 const timers = {
@@ -148,7 +148,12 @@ export class Engine {
         this._saveNow();
         for (const entry of [...this._windows.values()])
             this._untrack(entry);
+        cancelPendingPlacements();
         this._saveTimer.cancel();
+    }
+
+    _apply(win, spot) {
+        return applySpot(win, spot, this._layout, message => this._log.debug(message));
     }
 
     // --- Following windows -------------------------------------------------
@@ -326,7 +331,7 @@ export class Engine {
             const entry = this._windows.get(item.key);
             if (item.kind === 'pin')
                 this._memoryOf(entry).pins[setupKey] = item.pin.id;
-            const result = applySpot(entry.win, item.spot, this._layout);
+            const result = this._apply(entry.win, item.spot);
             const why = item.kind === 'pin' ? 'its pin' : 'where it was last in this setup';
             this._log.debug(`${result}: ${describeWindow(entry.win)} -> ` +
                 `${describeSpot(item.spot, this._layout)} (${why})`);
@@ -408,12 +413,12 @@ export class Engine {
         });
         if (decision?.kind === 'pin') {
             this._memoryOf(entry).pins[setupKey] = decision.pin.id;
-            const result = applySpot(win, decision.pin, this._layout);
+            const result = this._apply(win, decision.pin);
             const how = decision.pin.title === win.get_title() ? 'same title' : 'first free pin of the app';
             this._log.debug(`new ${describeWindow(win)}: ${result} -> ` +
                 `${describeSpot(decision.pin, this._layout)} (pin "${decision.pin.title}", ${how})`);
         } else if (decision?.kind === 'closed') {
-            const result = applySpot(win, decision.entry, this._layout);
+            const result = this._apply(win, decision.entry);
             this._log.debug(`new ${describeWindow(win)}: ${result} -> ` +
                 `${describeSpot(decision.entry, this._layout)} ` +
                 `(closed window "${decision.entry.title}")`);

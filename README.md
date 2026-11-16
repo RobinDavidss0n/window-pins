@@ -83,6 +83,12 @@ out the new setup, and then:
 Moves GNOME makes while the monitors change are not taken as yours; what
 is remembered is where windows were just before the change.
 
+A window tiled to half of a monitor (Super+Left/Right, or dragged to
+the edge) comes back on that half, maximized vertically. GNOME offers
+extensions no way to put a window in its edge-tile mode, so it is not
+edge-tiled in GNOME's sense: it looks the same, and Super+Left/Right
+tile it again. A pin made on a tiled window keeps that half too.
+
 When a new window opens, window-pins waits until its title has settled
 (1 s without a change, at most 3 s after it is shown, because browsers and
 Electron apps change their title right after opening), so GNOME and other

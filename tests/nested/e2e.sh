@@ -166,6 +166,23 @@ with_win "Alpha three" "w.unmaximize(); return 'ok'" > /dev/null
 sleep 1
 expect_eq "Alpha three unmaximizes on B" "$(with_win 'Alpha three' 'return String(w.get_monitor())')" '"1"'
 
+step "a window edge-tiled to the left half of B (Super+Left) comes back on that half"
+pids+=("$(open_app org.example.Tile 'Tile left')")
+settle
+move "Tile left" 2300 300 500 400
+with_win "Tile left" "w.activate(global.get_current_time()); return 'ok'" > /dev/null
+sleep 0.5
+super_key Left
+sleep 1.5
+frame_flags() { with_win "$1" 'const r = w.get_frame_rect(); return [w.get_monitor(), r.x, r.y, r.width, r.height, w.get_maximize_flags()].join(" ")'; }
+tiled=$(frame_flags "Tile left")
+expect_eq "tiled to the left half of B, maximized vertically" "$tiled" '"1 1920 0 640 1024 2"'
+gjs -m "$here/display.js" only Meta-0 > /dev/null
+settle
+gjs -m "$here/display.js" all > /dev/null
+settle
+expect_eq "back on the left half of B" "$(frame_flags 'Tile left')" "$tiled"
+
 step "remember closed windows (switched on for Gamma only)"
 ev "$ENGINE.setRemember('org.example.Gamma', 'Gamma', true)" > /dev/null
 pids+=("$(open_app org.example.Gamma 'Gamma one')")
