@@ -95,11 +95,17 @@ Electron apps change their title right after opening), so GNOME and other
 extensions have placed it first. Then:
 
 1. A pin of this app in this setup with the same title as the window wins.
-2. Otherwise the window takes the first pin of the app that no other open
-   window holds. Each pin holds at most one window.
+2. Otherwise the window takes the pin of the app that no other open
+   window holds and whose title is most like the window's: the one that
+   shares the most words with it (the oldest pin on a tie). Apps keep
+   fixed parts in their titles, like the vault or account and the app's
+   name, around a part that changes, so a note from your work vault goes
+   to the pin of the work vault's window. Each pin holds at most one
+   window.
 3. Without a pin, if the app has "remember closed windows" on: the place
    of a closed window of the app with the same title in this setup,
-   otherwise of the app's most recently closed window in this setup.
+   otherwise of the one with the most similar title in this setup (the
+   most recently closed on a tie).
 4. Otherwise it stays where it opened.
 
 A window you start moving or resizing before it is placed is left where

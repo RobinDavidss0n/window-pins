@@ -6,7 +6,7 @@ import {assignMonitorIds, defaultSetupName, logicalMonitorId, monitorBaseId, set
     from '../extension/lib/setup.js';
 import {landedAt, sameRect, toAbsolute, toRelative} from '../extension/lib/geometry.js';
 import {isAppWindow} from '../extension/lib/filter.js';
-import {assignPins, chooseClosedSpot, decideNewWindow, planRestore}
+import {assignPins, chooseClosedSpot, decideNewWindow, planRestore, titleSimilarity}
     from '../extension/lib/matching.js';
 import {MonitorSettler, QuietTimer} from '../extension/lib/timing.js';
 import {
@@ -189,12 +189,45 @@ test('pin with the same title wins over an earlier pin of the app', () => {
     eq(got.get('1').id, 'b');
 });
 
-test('without a title match the first free pin of the app is taken', () => {
+test('without a title match and nothing in common the oldest free pin is taken', () => {
     const pins = [pin('a', 'chrome', 'Mail'), pin('b', 'chrome', 'Calendar')];
     const got = assignPins([{key: '1', wmClass: 'chrome', title: 'New Tab'}], pins);
     eq(got.get('1').id, 'a');
     const got2 = assignPins([{key: '1', wmClass: 'chrome', title: 'New Tab'}], pins, new Set(['a']));
     eq(got2.get('1').id, 'b');
+});
+
+test('title similarity counts shared words', () => {
+    eq(titleSimilarity('NOTE - RD - work - Obsidian 1.15.1', 'NOTE - HA - personal - Obsidian 1.15.1'), 3);
+    eq(titleSimilarity('Todo - RD - work - Obsidian 1.15.1', 'NOTE - RD - work - Obsidian 1.15.1'), 4);
+    eq(titleSimilarity('a a b', 'a b'), 2);
+    eq(titleSimilarity(null, 'x'), 0);
+    eq(titleSimilarity('Inbox (3)', 'inbox'), 1);
+});
+
+test('without a title match the free pin with the most similar title is taken', () => {
+    const pins = [
+        pin('ha', 'obsidian', 'NOTE - HA - personal - Obsidian 1.15.1'),
+        pin('rd', 'obsidian', 'NOTE - RD - work - Obsidian 1.15.1'),
+    ];
+    // Another note open in the work vault goes to the work vault's pin.
+    const got = assignPins([{key: '1', wmClass: 'obsidian', title: 'Meeting - RD - work - Obsidian 1.15.1'}], pins);
+    eq(got.get('1').id, 'rd');
+    const mail = [
+        pin('home', 'chrome', 'Gmail - Inbox - someone@example.com - Gmail'),
+        pin('work', 'chrome', 'Gmail - Inbox - someone@example.org - Example AB e-post'),
+    ];
+    const got2 = assignPins([{key: '1', wmClass: 'chrome',
+        title: 'Gmail - Inbox (12) - someone@example.org - Example AB e-post'}], mail);
+    eq(got2.get('1').id, 'work');
+    // The work pin held: the window takes the other one anyway.
+    const got3 = assignPins([{key: '1', wmClass: 'obsidian', title: 'X - RD - work'}], pins, new Set(['rd']));
+    eq(got3.get('1').id, 'ha');
+});
+
+test('similarity ties go to the oldest pin', () => {
+    const pins = [pin('old', 'app', 'one shared'), pin('new', 'app', 'two shared')];
+    eq(assignPins([{key: '1', wmClass: 'app', title: 'shared'}], pins).get('1').id, 'old');
 });
 
 test('one window per pin; exact titles are matched before fallbacks', () => {
@@ -231,6 +264,17 @@ test('closed spot: same title in this setup, else the most recent in this setup'
     eq(chooseClosedSpot(entries, 'Z', 'S').monitor, 'b');
     eq(chooseClosedSpot(entries, 'A', 'T').monitor, 'c');
     eq(chooseClosedSpot(entries, 'A', 'U'), null);
+});
+
+test('closed spot: else the most similar title in this setup, newest on a tie', () => {
+    const entries = [
+        {title: 'NOTE - RD - work - Obsidian', setupKey: 'S', closedAt: 10, ...spot('work')},
+        {title: 'NOTE - HA - personal - Obsidian', setupKey: 'S', closedAt: 30, ...spot('home')},
+        {title: 'Other - HA - personal - Obsidian', setupKey: 'S', closedAt: 20, ...spot('home-old')},
+    ];
+    eq(chooseClosedSpot(entries, 'Todo - RD - work - Obsidian', 'S').monitor, 'work');
+    eq(chooseClosedSpot(entries, 'Todo - HA - personal - Obsidian', 'S').monitor, 'home');
+    eq(chooseClosedSpot(entries, 'Unrelated', 'S').monitor, 'home');
 });
 
 test('new window: pins take precedence over closed spots', () => {

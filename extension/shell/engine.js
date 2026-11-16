@@ -414,7 +414,8 @@ export class Engine {
         if (decision?.kind === 'pin') {
             this._memoryOf(entry).pins[setupKey] = decision.pin.id;
             const result = this._apply(win, decision.pin);
-            const how = decision.pin.title === win.get_title() ? 'same title' : 'first free pin of the app';
+            const how = decision.pin.title === win.get_title()
+                ? 'same title' : 'free pin of the app with the most similar title';
             this._log.debug(`new ${describeWindow(win)}: ${result} -> ` +
                 `${describeSpot(decision.pin, this._layout)} (pin "${decision.pin.title}", ${how})`);
         } else if (decision?.kind === 'closed') {
