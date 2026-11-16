@@ -8,6 +8,8 @@ import St from 'gi://St';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
+import {gtypeName} from './gtype.js';
+
 const MAX_LABEL = 48;
 
 function shorten(text, max = MAX_LABEL) {
@@ -24,7 +26,7 @@ function pinLabel(pin) {
  * A menu row for a pin: its label, an "only this exact title" switch
  * and a remove button.
  */
-const PinItem = GObject.registerClass(
+const PinItem = GObject.registerClass({GTypeName: gtypeName('PinItem')},
 class PinItem extends PopupMenu.PopupBaseMenuItem {
     _init(pin, onRemove, onExactTitle) {
         super._init({reactive: false, can_focus: false});
@@ -54,7 +56,7 @@ class PinItem extends PopupMenu.PopupBaseMenuItem {
 });
 
 /** A menu row with an entry for the setup's name. */
-const SetupNameItem = GObject.registerClass(
+const SetupNameItem = GObject.registerClass({GTypeName: gtypeName('SetupNameItem')},
 class SetupNameItem extends PopupMenu.PopupBaseMenuItem {
     _init(onRename) {
         super._init({reactive: false, can_focus: false});
@@ -86,7 +88,7 @@ class SetupNameItem extends PopupMenu.PopupBaseMenuItem {
     }
 });
 
-export const Indicator = GObject.registerClass(
+export const Indicator = GObject.registerClass({GTypeName: gtypeName('Indicator')},
 class Indicator extends PanelMenu.Button {
     /**
      * @param {import('./engine.js').Engine} engine

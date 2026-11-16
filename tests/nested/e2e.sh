@@ -87,7 +87,7 @@ pin() {
 # Pin a window without going through focus (activating a window on
 # another workspace switches workspaces first).
 pin_window() { with_win "$1" "return $ENGINE.pinWindow(w)?.pin.title ?? 'none'"; }
-EXT="Main.extensionManager.lookup('$WP_UUID').stateObj"
+EXT="Main.extensionManager.lookup('$WP_UUID').stateObj._impl"
 # Text of the OSD shown on a monitor, or "hidden".
 osd_text() {
     ev "(() => { const o = Main.osdWindowManager._osdWindows[$1]; return o.visible ? o._label.text : 'hidden'; })()"

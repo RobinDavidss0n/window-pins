@@ -1,90 +1,74 @@
-// Window Pins: puts windows back where they were for each monitor setup,
-// and places pinned windows on their pins.
-
-import Gio from 'gi://Gio';
-import Meta from 'gi://Meta';
-import Shell from 'gi://Shell';
+// Window Pins loader.
+//
+// GJS caches ES modules by URL for the life of the shell process, so after
+// an update a disable and enable would run the old code again, and on
+// Wayland updates would need a logout. This loader is small and rarely
+// changes. Each install puts the actual code in versions/<id>/ and writes
+// <id> to the file `current` (and the id it replaces to `previous`); every
+// enable imports versions/<id>/main.js, whose own imports resolve inside
+// that directory, so a new version runs entirely from new URLs.
+//
+// The modules of earlier versions stay in memory until the shell exits.
 
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
-import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
-import {Engine} from './shell/engine.js';
-import {Indicator} from './shell/indicator.js';
-import {Logger} from './shell/log.js';
-import {Store, defaultStatePath} from './shell/store.js';
+const decoder = new TextDecoder();
 
-const KEYBINDING = 'pin-window';
-
-export default class WindowPinsExtension extends Extension {
-    // The extension also runs on the lock screen (session mode
-    // "unlock-dialog"): docking and undocking often happen while the
-    // screen is locked, and GNOME would otherwise disable the extension
-    // exactly then. On the lock screen only the window tracking runs; the
-    // panel menu and the shortcut exist only in the user session.
+export default class WindowPinsLoader extends Extension {
     enable() {
-        this._settings = this.getSettings();
-        this._logger = new Logger(this._settings);
-        this._engine = new Engine({
-            store: new Store(defaultStatePath(), this._logger),
-            logger: this._logger,
-        });
-        this._engine.enable();
-
-        this._sessionId = Main.sessionMode.connect('updated', () => this._syncUi());
-        this._syncUi();
+        // The import is asynchronous; a disable (or another enable) before
+        // it finishes replaces this token, and the late result is dropped.
+        const attempt = {};
+        this._attempt = attempt;
+        this._load(attempt).catch(e => console.error(`[window-pins] loader: ${e}`));
     }
 
     disable() {
-        Main.sessionMode.disconnect(this._sessionId);
-        this._removeUi();
-        this._engine.disable();
-        this._engine = null;
-        this._logger.destroy();
-        this._logger = null;
-        this._settings = null;
+        this._attempt = null;
+        const impl = this._impl;
+        this._impl = null;
+        impl?.disable();
     }
 
-    _syncUi() {
-        if (Main.sessionMode.isLocked || Main.sessionMode.isGreeter)
-            this._removeUi();
-        else
-            this._addUi();
+    _readId(name) {
+        try {
+            const [, bytes] = this.dir.get_child(name).load_contents(null);
+            return decoder.decode(bytes).trim() || null;
+        } catch {
+            return null;
+        }
     }
 
-    _addUi() {
-        if (this._indicator)
+    // Runs the current version; if it cannot be imported or enabled, the
+    // previous one.
+    async _load(attempt) {
+        const ids = [...new Set([this._readId('current'), this._readId('previous')])]
+            .filter(Boolean);
+        if (ids.length === 0) {
+            console.error('[window-pins] no installed version (the file "current" is missing); not running');
             return;
-        this._indicator = new Indicator(this._engine, () => this._pinFocused());
-        Main.panel.addToStatusArea(this.uuid, this._indicator);
-        Main.wm.addKeybinding(KEYBINDING, this._settings,
-            Meta.KeyBindingFlags.IGNORE_AUTOREPEAT,
-            Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW,
-            () => this._pinFromShortcut());
-    }
-
-    _removeUi() {
-        if (!this._indicator)
+        }
+        for (const id of ids) {
+            let impl = null;
+            try {
+                const main = this.dir.get_child('versions').get_child(id).get_child('main.js');
+                const module = await import(main.get_uri());
+                if (this._attempt !== attempt)
+                    return;
+                impl = new module.default(this);
+                impl.enable();
+            } catch (e) {
+                console.error(`[window-pins] cannot load version ${id}: ${e}\n${e?.stack ?? ''}`);
+                try {
+                    impl?.disable();
+                } catch {}
+                continue;
+            }
+            this._impl = impl;
+            console.log(`[window-pins] running version ${id}` +
+                `${id === ids[0] ? '' : ' (the previous version, since the current one failed)'}`);
             return;
-        Main.wm.removeKeybinding(KEYBINDING);
-        this._indicator.destroy();
-        this._indicator = null;
-    }
-
-    /** @returns {{win: Meta.Window|null, result: object|null}} */
-    _pinFocused() {
-        const win = this._engine.focusedWindow();
-        const result = this._engine.pinWindow(win);
-        if (!result)
-            this._logger.debug('pin: no app window to pin, or the monitor layout is changing');
-        return {win, result};
-    }
-
-    // The shortcut gives no other sign that it worked, so it shows an
-    // OSD on the window's monitor (or the current one).
-    _pinFromShortcut() {
-        const {win, result} = this._pinFocused();
-        const label = !result ? "Can't pin this window" : result.moved ? 'Pin moved' : 'Pinned';
-        const monitor = result ? win.get_monitor() : global.display.get_current_monitor();
-        Main.osdWindowManager.showOne(monitor, Gio.ThemedIcon.new('view-pin-symbolic'), label, null);
+        }
+        console.error('[window-pins] no version could be loaded; not running');
     }
 }

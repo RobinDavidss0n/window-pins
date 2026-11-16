@@ -1,29 +1,21 @@
 UUID := window-pins@robindavidss0n.github.io
-SRC := extension
-EXTENSIONS_DIR := $(HOME)/.local/share/gnome-shell/extensions
+BUILD := build
 
-.PHONY: all schemas zip install link test test-nested clean
+.PHONY: all install reload zip test test-nested clean
 
-all: schemas
+all: zip
 
-schemas: $(SRC)/schemas/gschemas.compiled
-
-$(SRC)/schemas/gschemas.compiled: $(SRC)/schemas/*.gschema.xml
-	glib-compile-schemas $(SRC)/schemas
+# Installs into ~/.local/share/gnome-shell/extensions and, unless the
+# loader or metadata changed, reloads it in the running shell.
+install reload:
+	tools/install.sh
 
 # Builds $(UUID).shell-extension.zip for `gnome-extensions install`.
-zip: schemas
+zip:
+	rm -rf $(BUILD)
+	tools/install.sh --dest $(BUILD)/$(UUID) --no-reload
 	gnome-extensions pack --force --out-dir=. \
-		--extra-source=lib --extra-source=shell $(SRC)
-
-# Installs the zip (a copy); log out and in to load it on Wayland.
-install: zip
-	gnome-extensions install --force $(UUID).shell-extension.zip
-
-# Links the source tree instead of copying it, for development.
-link: schemas
-	mkdir -p $(EXTENSIONS_DIR)
-	ln -sfn $(CURDIR)/$(SRC) $(EXTENSIONS_DIR)/$(UUID)
+		--extra-source=versions --extra-source=current $(BUILD)/$(UUID)
 
 test:
 	gjs -m tests/unit.js
@@ -33,4 +25,4 @@ test-nested:
 	tests/nested/e2e.sh
 
 clean:
-	rm -f $(UUID).shell-extension.zip $(SRC)/schemas/gschemas.compiled
+	rm -rf $(BUILD) $(UUID).shell-extension.zip
