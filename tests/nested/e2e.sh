@@ -21,11 +21,14 @@ start_session() {
 }
 
 pids=()
+# The shell goes first, like at logout or a crash: windows still open then
+# are never seen closing.
 stop_session() {
-    for p in "${pids[@]}"; do kill "$p" 2> /dev/null; done
-    pids=()
     pkill -P "$session" 2> /dev/null
     kill "$session" 2> /dev/null
+    sleep 1
+    for p in "${pids[@]}"; do kill "$p" 2> /dev/null; done
+    pids=()
     wait 2> /dev/null
 }
 trap stop_session EXIT
@@ -354,6 +357,77 @@ ev "global.display.unset_input_focus(global.get_current_time()); $ENGINE._lastFo
 ev "$EXT._pinFromShortcut()" > /dev/null
 expect_eq "OSD without a window to pin" "$(osd_text "$(ev 'global.display.get_current_monitor()')")" "\"Can't pin this window\""
 ev "$ENGINE.removePin($ENGINE.pinsFor($ENGINE.currentSetup.key).find(p => p.title === 'Alpha one').id)" > /dev/null
+
+step "reload a new version without restarting the shell"
+ext_dir="$work/data/gnome-shell/extensions/$WP_UUID"
+# Always the nested shell's extension directory and log, never the user's.
+install_nested() {
+    XDG_DATA_HOME="$work/data" WP_SHELL_LOG="$work/shell.log" \
+        "$here/../../tools/install.sh" --dest "$ext_dir" "$@"
+}
+version_a=$(cat "$ext_dir/current")
+grep -a -q "running version $version_a\$" "$work/shell.log" &&
+    echo "   ok: version A ($version_a) is running" || { echo "   FAIL: version A not running"; fails=$((fails + 1)); }
+summary() {
+    ev "(() => { const s = $ENGINE._state;
+      return s.pins.map(p => p.title).join(',') + ' / ' +
+        Object.entries(s.openWindows).map(([k, w]) => k + ':' + Object.keys(w.spots).length).join(','); })()"
+}
+before=$(summary)
+# Version B: the same code with a changed log line deep in shell/, to
+# show that every module is imported afresh.
+src_b="$work/src-b"
+rm -rf "$src_b"
+cp -r "$here/../../src" "$src_b"
+sed -i 's/enabled in setup/enabled (variant B) in setup/' "$src_b/shell/engine.js"
+out=$(install_nested --src "$src_b")
+echo "$out" | sed 's/^/   | /'
+version_b=$(cat "$ext_dir/current")
+[[ $out == *"Reloaded: version $version_b is running."* ]] &&
+    echo "   ok: version B ($version_b) reported running" || { echo "   FAIL: reload not confirmed"; fails=$((fails + 1)); }
+grep -a -q 'enabled (variant B) in setup' "$work/shell.log" &&
+    echo "   ok: version B's code ran" || { echo "   FAIL: version B's code did not run"; fails=$((fails + 1)); }
+expect_eq "pins and open-window spots survive the reload" "$(summary)" "$before"
+expect_eq "panel indicators of window-pins" \
+    "$(ev "String(Main.panel.get_children().flatMap(box => box.get_children())
+        .map(c => c.get_first_child()?.constructor.\$gtype.name ?? '')
+        .filter(n => n.startsWith('WindowPins_Indicator') || n.includes('indicator_Indicator')).length)")" '"1"'
+expect_eq "the shortcut is registered" "$(ev "String(Boolean(Main.wm._allowedKeybindings['pin-window']))")" '"true"'
+recorded_before=$(grep -a -c 'recorded org.example.Alpha "Alpha one"' "$work/shell.log")
+move "Alpha one" 2110 210 400 300
+sleep 1.5
+expect_eq "one engine records a move (no leftover from version A)" \
+    "$(($(grep -a -c 'recorded org.example.Alpha "Alpha one"' "$work/shell.log") - recorded_before))" "1"
+move "Alpha one" 2100 200 400 300
+sleep 1
+gjs -m "$here/display.js" only Meta-0 > /dev/null
+settle
+gjs -m "$here/display.js" all > /dev/null
+settle
+expect_win "Alpha one" 1 2100 200 400 300
+
+step "a broken version: a clear log line, and the previous version keeps running"
+src_c="$work/src-c"
+rm -rf "$src_c"
+cp -r "$here/../../src" "$src_c"
+echo 'this is not JavaScript' >> "$src_c/shell/engine.js"
+out=$(install_nested --src "$src_c" 2>&1)
+echo "$out" | sed 's/^/   | /'
+version_c=$(cat "$ext_dir/current")
+grep -a -q "cannot load version $version_c: SyntaxError" "$work/shell.log" &&
+    echo "   ok: the failure is logged" || { echo "   FAIL: no failure line"; fails=$((fails + 1)); }
+grep -a -q "running version $version_b (the previous version, since the current one failed)" "$work/shell.log" &&
+    echo "   ok: version B runs again" || { echo "   FAIL: version B not running"; fails=$((fails + 1)); }
+expect_eq "state still there" "$(summary)" "$before"
+
+step "a changed loader is not reloaded: log out once"
+echo '// changed' >> "$ext_dir/extension.js"
+out=$(install_nested)
+echo "$out" | sed 's/^/   | /'
+[[ $out == *"log out and back in once"* ]] &&
+    echo "   ok: asks to log out" || { echo "   FAIL: no log-out message"; fails=$((fails + 1)); }
+expect_eq "still running version B" \
+    "$(grep -a 'running version' "$work/shell.log" | tail -1 | sed 's/^.*running version \([^ ]*\).*$/\1/')" "$version_b"
 
 step "shell restart (like logout or reboot) with a remembered app's window still open"
 move "Gamma other" 2300 500 450 300
