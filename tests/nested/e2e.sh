@@ -251,6 +251,42 @@ expect_eq "indicator after unlock" "$(ev "String(Boolean(Main.panel.statusArea['
 expect_eq "shortcut after unlock" "$(ev "String(Boolean(Main.wm._allowedKeybindings['pin-window']))")" '"true"'
 expect_win "Alpha one" 1 2100 200 400 300
 
+step "overlapping windows keep their stacking order across a monitor switch"
+pids+=("$(open_app org.example.Stack 'Stack low' 'Stack high')")
+settle
+gjs -m "$here/display.js" only Meta-0 > /dev/null
+settle
+move "Stack low" 200 200 500 400
+move "Stack high" 300 250 500 400
+sleep 1
+gjs -m "$here/display.js" all > /dev/null
+settle
+move "Stack low" 400 400 500 400
+move "Stack high" 450 450 500 400
+with_win "Stack low" "w.raise(); return 'ok'" > /dev/null
+with_win "Stack high" "w.raise(); return 'ok'" > /dev/null
+sleep 1
+stack_order() {
+    ev "global.display.sort_windows_by_stacking(global.display.list_all_windows())
+        .map(w => w.get_title()).filter(t => t.startsWith('Stack')).join(' < ')"
+}
+expect_eq "before the switch" "$(stack_order)" '"Stack low < Stack high"'
+with_win "Alpha three" "w.activate(global.get_current_time()); return 'ok'" > /dev/null
+sleep 0.5
+focus_title() { ev "String(global.display.focus_window?.get_title())"; }
+focus_before=$(focus_title)
+gjs -m "$here/display.js" only Meta-0 > /dev/null
+# Something raises the lower window while the layout settles.
+sleep 0.3
+with_win "Stack low" "w.raise(); return 'ok'" > /dev/null
+expect_eq "order changed while settling" "$(stack_order)" '"Stack high < Stack low"'
+settle
+expect_eq "order back after the restore" "$(stack_order)" '"Stack low < Stack high"'
+expect_eq "focus unchanged" "$(focus_title)" "$focus_before"
+expect_win "Stack high" 0 300 250 500 400
+gjs -m "$here/display.js" all > /dev/null
+settle
+
 step "panel menu builds and lists the pins of this setup"
 labels=$(ev "(() => { const i = Main.panel.statusArea['$WP_UUID']; i.menu.open(false); const t = [];
   const walk = a => { if (a instanceof imports.gi.St.Label && a.text) t.push(a.text); a.get_children().forEach(walk); };

@@ -83,7 +83,10 @@ out the new setup, and then:
 3. All other windows stay where GNOME put them.
 
 Moves GNOME makes while the monitors change are not taken as yours; what
-is remembered is where windows were just before the change.
+is remembered is where windows were just before the change. Which
+window was on top of which is remembered too: after the windows are put
+back, they are raised in that order, so overlapping windows end up
+stacked as before. The focus does not change.
 
 A window tiled to half of a monitor (Super+Left/Right, or dragged to
 the edge) comes back on that half, maximized vertically. GNOME offers

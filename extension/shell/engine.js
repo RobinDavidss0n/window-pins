@@ -72,6 +72,9 @@ export class Engine {
         this._windows = new Map();
         this._lastFocusedKey = null;
         this._globalSignals = [];
+        /** Keys of the tracked windows bottom to top, taken before the
+         * monitor layout changed; null when there is none. */
+        this._stacking = null;
     }
 
     enable() {
@@ -142,6 +145,7 @@ export class Engine {
         if (!this._settler.settling)
             this._snapshot('extension disabled');
         this._settler.cancel();
+        this._stacking = null;
         for (const [object, id] of this._globalSignals)
             object.disconnect(id);
         this._globalSignals = [];
@@ -292,8 +296,12 @@ export class Engine {
     // but before it moves windows off monitors that are gone, so this is
     // the last moment the windows are where the user had them.
     _onMonitorsChanging() {
-        if (!this._settler.settling)
+        if (!this._settler.settling) {
             this._snapshot('monitor layout about to change');
+            // Which window is on top of which, bottom first.
+            this._stacking = global.display.sort_windows_by_stacking(
+                this._trackedEntries().map(entry => entry.win)).map(windowKey);
+        }
         this._settler.poke();
     }
 
@@ -337,6 +345,7 @@ export class Engine {
                 `${describeSpot(item.spot, this._layout)} (${why})`);
         }
         const placed = new Set(plan.map(item => item.key));
+        this._restoreStacking(placed);
         const taken = new Set([...plan.filter(item => item.pin).map(item => item.pin.id),
             ...windows.map(w => w.heldPinId).filter(Boolean)]);
         for (const entry of entries) {
@@ -357,6 +366,27 @@ export class Engine {
             this._recordSoon(entry);
         this._state.lastSetupKey = setupKey;
         this._saveSoon();
+    }
+
+    /**
+     * Raise the restored windows in the order they were stacked just
+     * before the monitor layout changed, bottom first, so overlapping
+     * windows end up in the same order. Raising does not move the focus.
+     */
+    _restoreStacking(restored) {
+        const order = this._stacking;
+        this._stacking = null;
+        if (!order)
+            return;
+        const raised = [];
+        for (const key of order) {
+            const entry = this._windows.get(key);
+            if (entry && restored.has(key)) {
+                entry.win.raise();
+                raised.push(key);
+            }
+        }
+        this._log.debug(`restored the stacking order of ${raised.length} window(s)`);
     }
 
     _logExactTitleSkips(win, taken) {
