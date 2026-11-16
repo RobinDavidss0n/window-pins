@@ -20,16 +20,28 @@ function pinLabel(pin) {
     return pin.title ? shorten(`${app} — ${pin.title}`) : shorten(app);
 }
 
-/** A menu row with a label and a remove button. */
+/**
+ * A menu row for a pin: its label, an "only this exact title" switch
+ * and a remove button.
+ */
 const PinItem = GObject.registerClass(
 class PinItem extends PopupMenu.PopupBaseMenuItem {
-    _init(pin, onRemove) {
+    _init(pin, onRemove, onExactTitle) {
         super._init({reactive: false, can_focus: false});
         this.add_child(new St.Label({
             text: pinLabel(pin),
             x_expand: true,
             y_align: Clutter.ActorAlign.CENTER,
         }));
+        this.add_child(new St.Label({
+            text: 'Exact title',
+            style: 'font-size: smaller; margin: 0 6px 0 12px;',
+            y_align: Clutter.ActorAlign.CENTER,
+        }));
+        this.exactSwitch = new PopupMenu.Switch(pin.exactTitle);
+        this.exactSwitch.accessible_name = `Only windows titled exactly "${pin.title}"`;
+        this.exactSwitch.connect('notify::state', () => onExactTitle(pin, this.exactSwitch.state));
+        this.add_child(this.exactSwitch);
         const button = new St.Button({
             style_class: 'icon-button',
             can_focus: true,
@@ -123,6 +135,12 @@ class Indicator extends PanelMenu.Button {
         this._refresh();
     }
 
+    _makePinRow(pin) {
+        return new PinItem(pin,
+            p => this._removePin(p),
+            (p, on) => this._engine.setPinExactTitle(p.id, on));
+    }
+
     _refresh() {
         const setup = this._engine.currentSetup;
         this._nameItem.setSetup(setup.key, setup.name);
@@ -143,7 +161,7 @@ class Indicator extends PanelMenu.Button {
             this._pinsSection.addMenuItem(empty);
         }
         for (const pin of pins)
-            this._pinsSection.addMenuItem(new PinItem(pin, p => this._removePin(p)));
+            this._pinsSection.addMenuItem(this._makePinRow(pin));
 
         this._otherSetups.menu.removeAll();
         const others = this._engine.otherSetupsWithPins();
@@ -153,7 +171,7 @@ class Indicator extends PanelMenu.Button {
             heading.label.style = 'font-weight: bold;';
             this._otherSetups.menu.addMenuItem(heading);
             for (const pin of other.pins)
-                this._otherSetups.menu.addMenuItem(new PinItem(pin, p => this._removePin(p)));
+                this._otherSetups.menu.addMenuItem(this._makePinRow(pin));
         }
 
         this._remember.menu.removeAll();

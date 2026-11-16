@@ -166,6 +166,23 @@ with_win "Alpha three" "w.unmaximize(); return 'ok'" > /dev/null
 sleep 1
 expect_eq "Alpha three unmaximizes on B" "$(with_win 'Alpha three' 'return String(w.get_monitor())')" '"1"'
 
+step "a window edge-tiled to the left half of B (Super+Left) comes back on that half"
+pids+=("$(open_app org.example.Tile 'Tile left')")
+settle
+move "Tile left" 2300 300 500 400
+with_win "Tile left" "w.activate(global.get_current_time()); return 'ok'" > /dev/null
+sleep 0.5
+super_key Left
+sleep 1.5
+frame_flags() { with_win "$1" 'const r = w.get_frame_rect(); return [w.get_monitor(), r.x, r.y, r.width, r.height, w.get_maximize_flags()].join(" ")'; }
+tiled=$(frame_flags "Tile left")
+expect_eq "tiled to the left half of B, maximized vertically" "$tiled" '"1 1920 0 640 1024 2"'
+gjs -m "$here/display.js" only Meta-0 > /dev/null
+settle
+gjs -m "$here/display.js" all > /dev/null
+settle
+expect_eq "back on the left half of B" "$(frame_flags 'Tile left')" "$tiled"
+
 step "remember closed windows (switched on for Gamma only)"
 ev "$ENGINE.setRemember('org.example.Gamma', 'Gamma', true)" > /dev/null
 pids+=("$(open_app org.example.Gamma 'Gamma one')")
@@ -234,6 +251,42 @@ expect_eq "indicator after unlock" "$(ev "String(Boolean(Main.panel.statusArea['
 expect_eq "shortcut after unlock" "$(ev "String(Boolean(Main.wm._allowedKeybindings['pin-window']))")" '"true"'
 expect_win "Alpha one" 1 2100 200 400 300
 
+step "overlapping windows keep their stacking order across a monitor switch"
+pids+=("$(open_app org.example.Stack 'Stack low' 'Stack high')")
+settle
+gjs -m "$here/display.js" only Meta-0 > /dev/null
+settle
+move "Stack low" 200 200 500 400
+move "Stack high" 300 250 500 400
+sleep 1
+gjs -m "$here/display.js" all > /dev/null
+settle
+move "Stack low" 400 400 500 400
+move "Stack high" 450 450 500 400
+with_win "Stack low" "w.raise(); return 'ok'" > /dev/null
+with_win "Stack high" "w.raise(); return 'ok'" > /dev/null
+sleep 1
+stack_order() {
+    ev "global.display.sort_windows_by_stacking(global.display.list_all_windows())
+        .map(w => w.get_title()).filter(t => t.startsWith('Stack')).join(' < ')"
+}
+expect_eq "before the switch" "$(stack_order)" '"Stack low < Stack high"'
+with_win "Alpha three" "w.activate(global.get_current_time()); return 'ok'" > /dev/null
+sleep 0.5
+focus_title() { ev "String(global.display.focus_window?.get_title())"; }
+focus_before=$(focus_title)
+gjs -m "$here/display.js" only Meta-0 > /dev/null
+# Something raises the lower window while the layout settles.
+sleep 0.3
+with_win "Stack low" "w.raise(); return 'ok'" > /dev/null
+expect_eq "order changed while settling" "$(stack_order)" '"Stack high < Stack low"'
+settle
+expect_eq "order back after the restore" "$(stack_order)" '"Stack low < Stack high"'
+expect_eq "focus unchanged" "$(focus_title)" "$focus_before"
+expect_win "Stack high" 0 300 250 500 400
+gjs -m "$here/display.js" all > /dev/null
+settle
+
 step "panel menu builds and lists the pins of this setup"
 labels=$(ev "(() => { const i = Main.panel.statusArea['$WP_UUID']; i.menu.open(false); const t = [];
   const walk = a => { if (a instanceof imports.gi.St.Label && a.text) t.push(a.text); a.get_children().forEach(walk); };
@@ -261,6 +314,21 @@ ev "$ENGINE.renameSetup($ENGINE.currentSetup.key, '  ')" > /dev/null
 expect_eq "default name back" "$(setup_name)" '"2 monitors"'
 ev "$ENGINE.removePin($ENGINE.pinsFor($ENGINE.currentSetup.key).find(p => p.wmClass === 'org.example.Beta').id)" > /dev/null
 expect_eq "pins left" "$(ev "$ENGINE.pinsFor($ENGINE.currentSetup.key).map(p => p.title).join(',')")" '"Alpha two"'
+
+step "the menu's exact-title switch: the pin then only takes windows with exactly its title"
+ev "(() => { const i = Main.panel.statusArea['$WP_UUID']; i.menu.open(false);
+  i._pinsSection._getMenuItems()[0].exactSwitch.state = true; i.menu.close(false); return 'ok'; })()" > /dev/null
+expect_eq "flag saved on the pin" \
+    "$(ev "String($ENGINE.pinsFor($ENGINE.currentSetup.key).find(p => p.title === 'Alpha two').exactTitle)")" '"true"'
+close_win "Alpha two"
+sleep 1
+pids+=("$(open_app org.example.Alpha 'Alpha other')")
+settle
+expect_eq "Alpha other not placed on the pin (on B)" "$(with_win 'Alpha other' 'return String(w.get_monitor())')" '"0"'
+grep -a -q 'Alpha other" .*skipped pin "Alpha two", it only takes windows with exactly its title' "$work/shell.log" &&
+    echo "   ok: skip logged" || { echo "   FAIL: skip not logged"; fails=$((fails + 1)); }
+close_win "Alpha other"
+sleep 1
 
 step "state file"
 state="$work/config/window-pins/state.json"

@@ -7,7 +7,7 @@
 
 import GLib from 'gi://GLib';
 
-import {decideNewWindow, planRestore} from '../lib/matching.js';
+import {decideNewWindow, exactTitlePinsSkipped, planRestore} from '../lib/matching.js';
 import {defaultSetupName} from '../lib/setup.js';
 import {
     addClosedEntries, closeStaleOpenWindows, heldPinIds, newPinId, normalizeState, pruneState,
@@ -19,7 +19,7 @@ import {
 import {readLayout, refreshWorkAreas} from './monitors.js';
 import {shellInstanceId} from './store.js';
 import {
-    applySpot, appNameOf, describeSpot, isTrackable, readSpot, windowKey,
+    applySpot, appNameOf, cancelPendingPlacements, describeSpot, isTrackable, readSpot, windowKey,
 } from './windows.js';
 
 const timers = {
@@ -72,6 +72,9 @@ export class Engine {
         this._windows = new Map();
         this._lastFocusedKey = null;
         this._globalSignals = [];
+        /** Keys of the tracked windows bottom to top, taken before the
+         * monitor layout changed; null when there is none. */
+        this._stacking = null;
     }
 
     enable() {
@@ -142,13 +145,19 @@ export class Engine {
         if (!this._settler.settling)
             this._snapshot('extension disabled');
         this._settler.cancel();
+        this._stacking = null;
         for (const [object, id] of this._globalSignals)
             object.disconnect(id);
         this._globalSignals = [];
         this._saveNow();
         for (const entry of [...this._windows.values()])
             this._untrack(entry);
+        cancelPendingPlacements();
         this._saveTimer.cancel();
+    }
+
+    _apply(win, spot) {
+        return applySpot(win, spot, this._layout, message => this._log.debug(message));
     }
 
     // --- Following windows -------------------------------------------------
@@ -287,8 +296,12 @@ export class Engine {
     // but before it moves windows off monitors that are gone, so this is
     // the last moment the windows are where the user had them.
     _onMonitorsChanging() {
-        if (!this._settler.settling)
+        if (!this._settler.settling) {
             this._snapshot('monitor layout about to change');
+            // Which window is on top of which, bottom first.
+            this._stacking = global.display.sort_windows_by_stacking(
+                this._trackedEntries().map(entry => entry.win)).map(windowKey);
+        }
         this._settler.poke();
     }
 
@@ -326,10 +339,18 @@ export class Engine {
             const entry = this._windows.get(item.key);
             if (item.kind === 'pin')
                 this._memoryOf(entry).pins[setupKey] = item.pin.id;
-            const result = applySpot(entry.win, item.spot, this._layout);
+            const result = this._apply(entry.win, item.spot);
             const why = item.kind === 'pin' ? 'its pin' : 'where it was last in this setup';
             this._log.debug(`${result}: ${describeWindow(entry.win)} -> ` +
                 `${describeSpot(item.spot, this._layout)} (${why})`);
+        }
+        const placed = new Set(plan.map(item => item.key));
+        this._restoreStacking(placed);
+        const taken = new Set([...plan.filter(item => item.pin).map(item => item.pin.id),
+            ...windows.map(w => w.heldPinId).filter(Boolean)]);
+        for (const entry of entries) {
+            if (!placed.has(entry.key))
+                this._logExactTitleSkips(entry.win, taken);
         }
         this._log.debug(`${entries.length - plan.length} window(s) without a spot in this setup left alone`);
 
@@ -345,6 +366,35 @@ export class Engine {
             this._recordSoon(entry);
         this._state.lastSetupKey = setupKey;
         this._saveSoon();
+    }
+
+    /**
+     * Raise the restored windows in the order they were stacked just
+     * before the monitor layout changed, bottom first, so overlapping
+     * windows end up in the same order. Raising does not move the focus.
+     */
+    _restoreStacking(restored) {
+        const order = this._stacking;
+        this._stacking = null;
+        if (!order)
+            return;
+        const raised = [];
+        for (const key of order) {
+            const entry = this._windows.get(key);
+            if (entry && restored.has(key)) {
+                entry.win.raise();
+                raised.push(key);
+            }
+        }
+        this._log.debug(`restored the stacking order of ${raised.length} window(s)`);
+    }
+
+    _logExactTitleSkips(win, taken) {
+        const window = {wmClass: win.get_wm_class(), title: win.get_title()};
+        for (const pin of exactTitlePinsSkipped(window, this._pinsFor(this._layout.key), taken)) {
+            this._log.debug(`${describeWindow(win)}: skipped pin "${pin.title}", ` +
+                'it only takes windows with exactly its title');
+        }
     }
 
     _registerSetup(layout) {
@@ -398,22 +448,26 @@ export class Engine {
 
         const setupKey = this._layout.key;
         const wmClass = win.get_wm_class();
+        const held = heldPinIds(this._state, setupKey, this._liveKeys(), entry.key);
         const decision = decideNewWindow({
             window: {key: entry.key, wmClass, title: win.get_title()},
             pins: this._pinsFor(setupKey),
-            held: heldPinIds(this._state, setupKey, this._liveKeys(), entry.key),
+            held,
             remember: Boolean(wmClass && this._state.remember[wmClass]),
             closed: (wmClass && this._state.closed[wmClass]) || [],
             setupKey,
         });
+        if (decision?.kind !== 'pin')
+            this._logExactTitleSkips(win, held);
         if (decision?.kind === 'pin') {
             this._memoryOf(entry).pins[setupKey] = decision.pin.id;
-            const result = applySpot(win, decision.pin, this._layout);
-            const how = decision.pin.title === win.get_title() ? 'same title' : 'first free pin of the app';
+            const result = this._apply(win, decision.pin);
+            const how = decision.pin.title === win.get_title()
+                ? 'same title' : 'free pin of the app with the most similar title';
             this._log.debug(`new ${describeWindow(win)}: ${result} -> ` +
                 `${describeSpot(decision.pin, this._layout)} (pin "${decision.pin.title}", ${how})`);
         } else if (decision?.kind === 'closed') {
-            const result = applySpot(win, decision.entry, this._layout);
+            const result = this._apply(win, decision.entry);
             this._log.debug(`new ${describeWindow(win)}: ${result} -> ` +
                 `${describeSpot(decision.entry, this._layout)} ` +
                 `(closed window "${decision.entry.title}")`);
@@ -539,7 +593,7 @@ export class Engine {
             let id = newPinId(now);
             while (this._state.pins.some(p => p.id === id))
                 id = newPinId(now);
-            pin = {id, ...fields, setupKey, created: now};
+            pin = {id, ...fields, setupKey, created: now, exactTitle: false};
             this._state.pins.push(pin);
             mem.pins[setupKey] = pin.id;
         }
@@ -556,6 +610,16 @@ export class Engine {
             return;
         this._state.pins = this._state.pins.filter(p => p.id !== id);
         this._log.debug(`removed pin ${pin.wmClass} "${pin.title}"`);
+        this._saveNow();
+    }
+
+    /** Whether a pin only takes windows with exactly its title. */
+    setPinExactTitle(id, on) {
+        const pin = this._state.pins.find(p => p.id === id);
+        if (!pin || pin.exactTitle === on)
+            return;
+        pin.exactTitle = on;
+        this._log.debug(`pin ${pin.wmClass} "${pin.title}": only this exact title ${on ? 'on' : 'off'}`);
         this._saveNow();
     }
 

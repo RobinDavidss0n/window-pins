@@ -8,7 +8,8 @@
 //   setups: {[setupKey]: {name, named: bool, monitors: [{id, label, builtin}],
 //            lastSeen}},
 //   pins: [{id, wmClass, appName, title, setupKey, monitor, workspace, rect,
-//           maximized, fullscreen, created}],
+//           maximized, fullscreen, created, exactTitle}],
+//                                 // exactTitle: only windows with this title
 //   remember: {[wmClass]: {appName}},           // apps with the toggle on
 //   closed: {[wmClass]: [{title, setupKey, monitor, workspace, rect,
 //                         maximized, fullscreen, closedAt}]},
@@ -124,6 +125,7 @@ export function normalizeState(raw) {
                 setupKey: p.setupKey,
                 ...spot,
                 created: isNumber(p.created) ? p.created : 0,
+                exactTitle: p.exactTitle === true,
             });
         }
     }

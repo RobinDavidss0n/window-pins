@@ -1,10 +1,11 @@
 // Reading a window's spot and putting a window on a spot.
 
+import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
 import Shell from 'gi://Shell';
 
 import {isAppWindow} from '../lib/filter.js';
-import {toAbsolute, toRelative, sameRect} from '../lib/geometry.js';
+import {landedAt, toAbsolute, toRelative, sameRect} from '../lib/geometry.js';
 
 const BOTH = Meta.MaximizeFlags.BOTH;
 
@@ -42,10 +43,14 @@ function workspaceOf(win) {
  * The window's current spot on a layout, or null when it is not on a
  * monitor of that layout.
  *
- * A maximized or fullscreen window's frame is the whole work area or
- * monitor; then the rect of `previous` (its last spot in this setup) is
+ * A fully maximized or fullscreen window's frame is the whole work area
+ * or monitor; then the rect of `previous` (its last spot in this setup) is
  * kept if it was on the same monitor, so restoring and later unmaximizing
  * gives back its normal size.
+ *
+ * A window maximized in one direction only (GNOME's half tiling is
+ * vertical maximize at half the width) keeps its actual frame: that frame
+ * is where it has to come back to.
  *
  * @param {Meta.Window} win
  * @param {import('./monitors.js').Layout} layout
@@ -59,7 +64,7 @@ export function readSpot(win, layout, previous = null) {
     const maximized = win.get_maximize_flags();
     const fullscreen = win.is_fullscreen();
     let rect = toRelative(win.get_frame_rect(), monitor.workArea);
-    if ((maximized || fullscreen) && previous?.monitor === monitor.id)
+    if ((maximized === BOTH || fullscreen) && previous?.monitor === monitor.id)
         rect = {...previous.rect};
     return {
         monitor: monitor.id,
@@ -71,7 +76,9 @@ export function readSpot(win, layout, previous = null) {
 }
 
 /**
- * Whether the window is already on the spot.
+ * Whether the window is already on the spot. Fully maximized and
+ * fullscreen windows only need the right monitor; others, including
+ * windows maximized in one direction, the same frame.
  */
 function isAt(win, spot, monitor, target) {
     if (win.get_monitor() !== monitor.index)
@@ -87,15 +94,74 @@ function isAt(win, spot, monitor, target) {
     return sameRect(win.get_frame_rect(), target);
 }
 
+/** Waits of maximizePartlyAt still running, so disable can stop them. */
+const pendingWaits = new Set();
+
+/**
+ * Maximize a window in one direction once its frame has arrived at
+ * `target`. Maximizing in one direction keeps the frame's other
+ * direction, so a half-tiled window comes back on its half. Doing it
+ * before the move has landed (a Wayland client acks the new size later,
+ * often only after a move to another monitor) would keep the old x and
+ * width. When the frame does not arrive within 2 s, the window is left
+ * where it is, not maximized.
+ *
+ * Mutter has no public call for its edge-tile mode, so the window ends
+ * up maximized vertically at half width rather than edge-tiled; it looks
+ * the same, and Super+Left/Right tile it again.
+ */
+function maximizePartlyAt(win, flags, target, log) {
+    if (landedAt(win.get_frame_rect(), target)) {
+        win.set_maximize_flags(flags);
+        return;
+    }
+    const wait = {ids: [], timeoutId: 0};
+    const finish = apply => {
+        pendingWaits.delete(wait);
+        for (const id of wait.ids)
+            win.disconnect(id);
+        if (wait.timeoutId)
+            GLib.source_remove(wait.timeoutId);
+        wait.timeoutId = 0;
+        if (apply)
+            win.set_maximize_flags(flags);
+    };
+    const check = () => {
+        if (landedAt(win.get_frame_rect(), target))
+            finish(true);
+    };
+    wait.cancel = () => finish(false);
+    wait.ids = [
+        win.connect('position-changed', check),
+        win.connect('size-changed', check),
+        win.connect('unmanaging', () => finish(false)),
+    ];
+    wait.timeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 2000, () => {
+        wait.timeoutId = 0;
+        finish(false);
+        log?.(`${win.get_wm_class()} "${win.get_title()}" did not reach its spot; ` +
+            'left there without maximizing it in one direction');
+        return GLib.SOURCE_REMOVE;
+    });
+    pendingWaits.add(wait);
+}
+
+/** Stop waiting for windows to arrive (the extension is disabled). */
+export function cancelPendingPlacements() {
+    for (const wait of [...pendingWaits])
+        wait.cancel();
+}
+
 /**
  * Put the window on a spot of the current layout.
  *
  * @param {Meta.Window} win
  * @param {object} spot
  * @param {import('./monitors.js').Layout} layout
+ * @param {Function|null} log debug log for what happens later
  * @returns {'moved'|'already-there'|'no-monitor'|'not-movable'}
  */
-export function applySpot(win, spot, layout) {
+export function applySpot(win, spot, layout, log = null) {
     const monitor = layout.monitors.find(m => m.id === spot.monitor);
     if (!monitor)
         return 'no-monitor';
@@ -123,7 +189,7 @@ export function applySpot(win, spot, layout) {
         if (spot.maximized === BOTH)
             win.maximize();
         else if (spot.maximized)
-            win.set_maximize_flags(spot.maximized);
+            maximizePartlyAt(win, spot.maximized, target, log);
         if (spot.fullscreen)
             win.make_fullscreen();
     }
@@ -143,7 +209,10 @@ export function applySpot(win, spot, layout) {
 export function describeSpot(spot, layout) {
     const monitor = layout.monitors.find(m => m.id === spot.monitor);
     const where = monitor ? `monitor ${monitor.index}` : 'missing monitor';
-    const state = spot.fullscreen ? ' fullscreen' : spot.maximized === BOTH ? ' maximized' : '';
+    const state = spot.fullscreen ? ' fullscreen'
+        : spot.maximized === BOTH ? ' maximized'
+            : spot.maximized ? ` maximized ${spot.maximized === Meta.MaximizeFlags.VERTICAL ? 'vertically' : 'horizontally'}`
+                : '';
     const r = spot.rect;
     return `${where} (${spot.monitor}), workspace ${spot.workspace}, ` +
         `${r.width}x${r.height}+${r.x}+${r.y}${state}`;

@@ -6,12 +6,65 @@
 // maximized the Meta.MaximizeFlags bits (0 none, 1 horizontal, 2 vertical,
 // 3 both).
 
+function titleWords(title) {
+    return (title ?? '').toLowerCase().split(/[\s\-–—|·:,;()[\]{}<>"']+/).filter(Boolean);
+}
+
+/**
+ * How alike two titles are: the number of words of `title` that also
+ * occur in `other` (each word of `other` counts once). Apps put fixed
+ * parts in their titles, such as the vault or account and the app's name
+ * ("NOTE - RD - work - Obsidian 1.15.1", "Gmail - Inbox (3) - name@work
+ * - Work Mail"), around a part that changes (the note, the mail); the
+ * fixed parts are what two titles of the same window share.
+ *
+ * @param {string|null} title
+ * @param {string|null} other
+ * @returns {number}
+ */
+export function titleSimilarity(title, other) {
+    const counts = new Map();
+    for (const word of titleWords(other))
+        counts.set(word, (counts.get(word) ?? 0) + 1);
+    let shared = 0;
+    for (const word of titleWords(title)) {
+        const n = counts.get(word) ?? 0;
+        if (n > 0) {
+            shared++;
+            counts.set(word, n - 1);
+        }
+    }
+    return shared;
+}
+
+/**
+ * The item whose title is most like `title`; the first one on a tie.
+ *
+ * @param {Array<{title: string}>} items
+ * @param {string|null} title
+ * @returns {object|null}
+ */
+export function mostSimilar(items, title) {
+    let best = null;
+    let bestScore = -1;
+    for (const item of items) {
+        const score = titleSimilarity(title, item.title);
+        if (score > bestScore) {
+            best = item;
+            bestScore = score;
+        }
+    }
+    return best;
+}
+
 /**
  * Match windows to pins of one setup.
  *
  * A pin whose title equals the window's title wins. A window without such
- * a pin takes the first pin of its app (by wm_class) that no window holds
- * yet. Each pin is held by at most one window.
+ * a pin takes the pin of its app (by wm_class) that no window holds yet
+ * and whose title is most like the window's (see titleSimilarity); on a
+ * tie, the oldest. A pin with `exactTitle` set only takes a window with
+ * its title. Each pin is held by at most one window.
  *
  * Exact titles are matched for all windows before any falls back, so an
  * earlier window cannot take the pin a later window matches by title.
@@ -42,7 +95,8 @@ export function assignPins(windows, pins, held = new Set()) {
     for (const w of windows) {
         if (!w.wmClass || result.has(w.key))
             continue;
-        const pin = pins.find(p => !taken.has(p.id) && p.wmClass === w.wmClass);
+        const pin = mostSimilar(pins.filter(p => !taken.has(p.id) && !p.exactTitle &&
+            p.wmClass === w.wmClass), w.title);
         if (pin)
             take(w, pin);
     }
@@ -50,9 +104,26 @@ export function assignPins(windows, pins, held = new Set()) {
 }
 
 /**
+ * Free pins of the window's app that would have been candidates for it
+ * but only take windows with their exact title. For the debug log.
+ *
+ * @param {{wmClass: string|null, title: string|null}} window
+ * @param {Array<object>} pins pins of the setup
+ * @param {Set<string>} taken ids of pins held by windows
+ * @returns {Array<object>}
+ */
+export function exactTitlePinsSkipped(window, pins, taken) {
+    if (!window.wmClass)
+        return [];
+    return pins.filter(p => p.exactTitle && p.wmClass === window.wmClass &&
+        p.title !== window.title && !taken.has(p.id));
+}
+
+/**
  * Pick the remembered spot of a closed window for a new window of the
  * same app: the most recent one with the same title in this setup,
- * otherwise the most recently closed one in this setup.
+ * otherwise the one in this setup with the most similar title (see
+ * titleSimilarity), the most recently closed on a tie.
  *
  * @param {Array<{title: string, setupKey: string, closedAt: number}>} entries
  *   closed-window entries of the app
@@ -64,7 +135,7 @@ export function chooseClosedSpot(entries, title, setupKey) {
     const inSetup = entries
         .filter(e => e.setupKey === setupKey)
         .sort((a, b) => b.closedAt - a.closedAt);
-    return inSetup.find(e => e.title === title) ?? inSetup[0] ?? null;
+    return inSetup.find(e => e.title === title) ?? mostSimilar(inSetup, title);
 }
 
 /**

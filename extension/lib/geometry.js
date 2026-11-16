@@ -79,3 +79,19 @@ export function sameRect(a, b, tolerance = 2) {
         Math.abs(a.width - b.width) <= tolerance &&
         Math.abs(a.height - b.height) <= tolerance;
 }
+
+/**
+ * Whether a window's frame has arrived at a requested rect: the position
+ * within 2 px, the size within 16 px (terminals and some editors round
+ * their size to whole character cells).
+ *
+ * @param {Rect} frame
+ * @param {Rect} target
+ * @returns {boolean}
+ */
+export function landedAt(frame, target) {
+    return Math.abs(frame.x - target.x) <= 2 &&
+        Math.abs(frame.y - target.y) <= 2 &&
+        Math.abs(frame.width - target.width) <= 16 &&
+        Math.abs(frame.height - target.height) <= 16;
+}

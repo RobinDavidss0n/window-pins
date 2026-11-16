@@ -61,8 +61,10 @@ The pin icon in the top bar opens the menu:
 - **Pin this window here** pins the focused window at its current place,
   for the current setup. Pinning a window that already has a pin in this
   setup moves that pin.
-- The pins of the current setup, each with a remove button, and under
-  **Pins in other setups** those of the other setups.
+- The pins of the current setup, and under **Pins in other setups** those
+  of the other setups. Each has a remove button and an **Exact title**
+  switch (off by default): with it on, the pin only takes a window whose
+  title is exactly the pin's title, never another window of the app.
 - **Remember closed windows**: a switch per app, for apps with open
   windows and apps already switched on.
 
@@ -81,7 +83,16 @@ out the new setup, and then:
 3. All other windows stay where GNOME put them.
 
 Moves GNOME makes while the monitors change are not taken as yours; what
-is remembered is where windows were just before the change.
+is remembered is where windows were just before the change. Which
+window was on top of which is remembered too: after the windows are put
+back, they are raised in that order, so overlapping windows end up
+stacked as before. The focus does not change.
+
+A window tiled to half of a monitor (Super+Left/Right, or dragged to
+the edge) comes back on that half, maximized vertically. GNOME offers
+extensions no way to put a window in its edge-tile mode, so it is not
+edge-tiled in GNOME's sense: it looks the same, and Super+Left/Right
+tile it again. A pin made on a tiled window keeps that half too.
 
 When a new window opens, window-pins waits until its title has settled
 (1 s without a change, at most 3 s after it is shown, because browsers and
@@ -89,11 +100,17 @@ Electron apps change their title right after opening), so GNOME and other
 extensions have placed it first. Then:
 
 1. A pin of this app in this setup with the same title as the window wins.
-2. Otherwise the window takes the first pin of the app that no other open
-   window holds. Each pin holds at most one window.
+2. Otherwise the window takes the pin of the app that no other open
+   window holds and whose title is most like the window's: the one that
+   shares the most words with it (the oldest pin on a tie). Apps keep
+   fixed parts in their titles, like the vault or account and the app's
+   name, around a part that changes, so a note from your work vault goes
+   to the pin of the work vault's window. Pins with **Exact title** on
+   are left out of this. Each pin holds at most one window.
 3. Without a pin, if the app has "remember closed windows" on: the place
    of a closed window of the app with the same title in this setup,
-   otherwise of the app's most recently closed window in this setup.
+   otherwise of the one with the most similar title in this setup (the
+   most recently closed on a tie).
 4. Otherwise it stays where it opened.
 
 A window you start moving or resizing before it is placed is left where
