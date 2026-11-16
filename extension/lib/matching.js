@@ -63,7 +63,8 @@ export function mostSimilar(items, title) {
  * A pin whose title equals the window's title wins. A window without such
  * a pin takes the pin of its app (by wm_class) that no window holds yet
  * and whose title is most like the window's (see titleSimilarity); on a
- * tie, the oldest. Each pin is held by at most one window.
+ * tie, the oldest. A pin with `exactTitle` set only takes a window with
+ * its title. Each pin is held by at most one window.
  *
  * Exact titles are matched for all windows before any falls back, so an
  * earlier window cannot take the pin a later window matches by title.
@@ -94,11 +95,28 @@ export function assignPins(windows, pins, held = new Set()) {
     for (const w of windows) {
         if (!w.wmClass || result.has(w.key))
             continue;
-        const pin = mostSimilar(pins.filter(p => !taken.has(p.id) && p.wmClass === w.wmClass), w.title);
+        const pin = mostSimilar(pins.filter(p => !taken.has(p.id) && !p.exactTitle &&
+            p.wmClass === w.wmClass), w.title);
         if (pin)
             take(w, pin);
     }
     return result;
+}
+
+/**
+ * Free pins of the window's app that would have been candidates for it
+ * but only take windows with their exact title. For the debug log.
+ *
+ * @param {{wmClass: string|null, title: string|null}} window
+ * @param {Array<object>} pins pins of the setup
+ * @param {Set<string>} taken ids of pins held by windows
+ * @returns {Array<object>}
+ */
+export function exactTitlePinsSkipped(window, pins, taken) {
+    if (!window.wmClass)
+        return [];
+    return pins.filter(p => p.exactTitle && p.wmClass === window.wmClass &&
+        p.title !== window.title && !taken.has(p.id));
 }
 
 /**

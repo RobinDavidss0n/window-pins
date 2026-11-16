@@ -61,8 +61,10 @@ The pin icon in the top bar opens the menu:
 - **Pin this window here** pins the focused window at its current place,
   for the current setup. Pinning a window that already has a pin in this
   setup moves that pin.
-- The pins of the current setup, each with a remove button, and under
-  **Pins in other setups** those of the other setups.
+- The pins of the current setup, and under **Pins in other setups** those
+  of the other setups. Each has a remove button and an **Exact title**
+  switch (off by default): with it on, the pin only takes a window whose
+  title is exactly the pin's title, never another window of the app.
 - **Remember closed windows**: a switch per app, for apps with open
   windows and apps already switched on.
 
@@ -100,8 +102,8 @@ extensions have placed it first. Then:
    shares the most words with it (the oldest pin on a tie). Apps keep
    fixed parts in their titles, like the vault or account and the app's
    name, around a part that changes, so a note from your work vault goes
-   to the pin of the work vault's window. Each pin holds at most one
-   window.
+   to the pin of the work vault's window. Pins with **Exact title** on
+   are left out of this. Each pin holds at most one window.
 3. Without a pin, if the app has "remember closed windows" on: the place
    of a closed window of the app with the same title in this setup,
    otherwise of the one with the most similar title in this setup (the

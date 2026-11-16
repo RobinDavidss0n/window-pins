@@ -6,7 +6,7 @@ import {assignMonitorIds, defaultSetupName, logicalMonitorId, monitorBaseId, set
     from '../extension/lib/setup.js';
 import {landedAt, sameRect, toAbsolute, toRelative} from '../extension/lib/geometry.js';
 import {isAppWindow} from '../extension/lib/filter.js';
-import {assignPins, chooseClosedSpot, decideNewWindow, planRestore, titleSimilarity}
+import {assignPins, chooseClosedSpot, decideNewWindow, exactTitlePinsSkipped, planRestore, titleSimilarity}
     from '../extension/lib/matching.js';
 import {MonitorSettler, QuietTimer} from '../extension/lib/timing.js';
 import {
@@ -225,6 +225,21 @@ test('without a title match the free pin with the most similar title is taken', 
     eq(got3.get('1').id, 'ha');
 });
 
+test('an exact-title pin takes only windows with its title', () => {
+    const exact = {...pin('a', 'obsidian', 'NOTE - RD - work'), exactTitle: true};
+    const other = pin('b', 'obsidian', 'NOTE - HA - personal');
+    eq(assignPins([{key: '1', wmClass: 'obsidian', title: 'NOTE - RD - work'}], [exact, other]).get('1').id, 'a');
+    // A similar title falls back to the other pin, not the exact-title one.
+    eq(assignPins([{key: '1', wmClass: 'obsidian', title: 'Todo - RD - work'}], [exact, other]).get('1').id, 'b');
+    eq(assignPins([{key: '1', wmClass: 'obsidian', title: 'Todo - RD - work'}], [exact]).size, 0);
+    const window = {wmClass: 'obsidian', title: 'Todo - RD - work'};
+    eq(exactTitlePinsSkipped(window, [exact, other], new Set()).map(p => p.id), ['a']);
+    eq(exactTitlePinsSkipped(window, [exact, other], new Set(['a'])), []);
+    eq(exactTitlePinsSkipped({...window, title: 'NOTE - RD - work'}, [exact], new Set()), []);
+    eq(decideNewWindow({window: {key: '1', ...window}, pins: [exact], held: new Set(),
+        remember: false, closed: [], setupKey: 'S'}), null);
+});
+
 test('similarity ties go to the oldest pin', () => {
     const pins = [pin('old', 'app', 'one shared'), pin('new', 'app', 'two shared')];
     eq(assignPins([{key: '1', wmClass: 'app', title: 'shared'}], pins).get('1').id, 'old');
@@ -395,6 +410,8 @@ test('normalizeState drops malformed parts and keeps good ones', () => {
     eq(Object.keys(state.setups), ['S']);
     eq(state.setups.S.monitors, [{id: 'a', label: 'a', builtin: false}]);
     eq(state.pins.map(p => p.id), ['a']);
+    eq(state.pins[0].exactTitle, false);
+    eq(normalizeState({pins: [{...pin('x', 'a', 't'), exactTitle: true}]}).pins[0].exactTitle, true);
     eq(state.remember, {chrome: {appName: 'Chrome'}, code: {appName: 'code'}});
     eq(state.closed.chrome.length, 1);
     eq(Object.keys(state.openWindows['12'].spots), ['S']);

@@ -7,7 +7,7 @@
 
 import GLib from 'gi://GLib';
 
-import {decideNewWindow, planRestore} from '../lib/matching.js';
+import {decideNewWindow, exactTitlePinsSkipped, planRestore} from '../lib/matching.js';
 import {defaultSetupName} from '../lib/setup.js';
 import {
     addClosedEntries, closeStaleOpenWindows, heldPinIds, newPinId, normalizeState, pruneState,
@@ -336,6 +336,13 @@ export class Engine {
             this._log.debug(`${result}: ${describeWindow(entry.win)} -> ` +
                 `${describeSpot(item.spot, this._layout)} (${why})`);
         }
+        const placed = new Set(plan.map(item => item.key));
+        const taken = new Set([...plan.filter(item => item.pin).map(item => item.pin.id),
+            ...windows.map(w => w.heldPinId).filter(Boolean)]);
+        for (const entry of entries) {
+            if (!placed.has(entry.key))
+                this._logExactTitleSkips(entry.win, taken);
+        }
         this._log.debug(`${entries.length - plan.length} window(s) without a spot in this setup left alone`);
 
         // New windows whose title settled while the layout was changing.
@@ -350,6 +357,14 @@ export class Engine {
             this._recordSoon(entry);
         this._state.lastSetupKey = setupKey;
         this._saveSoon();
+    }
+
+    _logExactTitleSkips(win, taken) {
+        const window = {wmClass: win.get_wm_class(), title: win.get_title()};
+        for (const pin of exactTitlePinsSkipped(window, this._pinsFor(this._layout.key), taken)) {
+            this._log.debug(`${describeWindow(win)}: skipped pin "${pin.title}", ` +
+                'it only takes windows with exactly its title');
+        }
     }
 
     _registerSetup(layout) {
@@ -403,14 +418,17 @@ export class Engine {
 
         const setupKey = this._layout.key;
         const wmClass = win.get_wm_class();
+        const held = heldPinIds(this._state, setupKey, this._liveKeys(), entry.key);
         const decision = decideNewWindow({
             window: {key: entry.key, wmClass, title: win.get_title()},
             pins: this._pinsFor(setupKey),
-            held: heldPinIds(this._state, setupKey, this._liveKeys(), entry.key),
+            held,
             remember: Boolean(wmClass && this._state.remember[wmClass]),
             closed: (wmClass && this._state.closed[wmClass]) || [],
             setupKey,
         });
+        if (decision?.kind !== 'pin')
+            this._logExactTitleSkips(win, held);
         if (decision?.kind === 'pin') {
             this._memoryOf(entry).pins[setupKey] = decision.pin.id;
             const result = this._apply(win, decision.pin);
@@ -545,7 +563,7 @@ export class Engine {
             let id = newPinId(now);
             while (this._state.pins.some(p => p.id === id))
                 id = newPinId(now);
-            pin = {id, ...fields, setupKey, created: now};
+            pin = {id, ...fields, setupKey, created: now, exactTitle: false};
             this._state.pins.push(pin);
             mem.pins[setupKey] = pin.id;
         }
@@ -562,6 +580,16 @@ export class Engine {
             return;
         this._state.pins = this._state.pins.filter(p => p.id !== id);
         this._log.debug(`removed pin ${pin.wmClass} "${pin.title}"`);
+        this._saveNow();
+    }
+
+    /** Whether a pin only takes windows with exactly its title. */
+    setPinExactTitle(id, on) {
+        const pin = this._state.pins.find(p => p.id === id);
+        if (!pin || pin.exactTitle === on)
+            return;
+        pin.exactTitle = on;
+        this._log.debug(`pin ${pin.wmClass} "${pin.title}": only this exact title ${on ? 'on' : 'off'}`);
         this._saveNow();
     }
 

@@ -279,6 +279,21 @@ expect_eq "default name back" "$(setup_name)" '"2 monitors"'
 ev "$ENGINE.removePin($ENGINE.pinsFor($ENGINE.currentSetup.key).find(p => p.wmClass === 'org.example.Beta').id)" > /dev/null
 expect_eq "pins left" "$(ev "$ENGINE.pinsFor($ENGINE.currentSetup.key).map(p => p.title).join(',')")" '"Alpha two"'
 
+step "the menu's exact-title switch: the pin then only takes windows with exactly its title"
+ev "(() => { const i = Main.panel.statusArea['$WP_UUID']; i.menu.open(false);
+  i._pinsSection._getMenuItems()[0].exactSwitch.state = true; i.menu.close(false); return 'ok'; })()" > /dev/null
+expect_eq "flag saved on the pin" \
+    "$(ev "String($ENGINE.pinsFor($ENGINE.currentSetup.key).find(p => p.title === 'Alpha two').exactTitle)")" '"true"'
+close_win "Alpha two"
+sleep 1
+pids+=("$(open_app org.example.Alpha 'Alpha other')")
+settle
+expect_eq "Alpha other not placed on the pin (on B)" "$(with_win 'Alpha other' 'return String(w.get_monitor())')" '"0"'
+grep -a -q 'Alpha other" .*skipped pin "Alpha two", it only takes windows with exactly its title' "$work/shell.log" &&
+    echo "   ok: skip logged" || { echo "   FAIL: skip not logged"; fails=$((fails + 1)); }
+close_win "Alpha other"
+sleep 1
+
 step "state file"
 state="$work/config/window-pins/state.json"
 python3 -I -c '
