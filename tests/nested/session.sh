@@ -1,6 +1,6 @@
 #!/bin/bash
 # Start a headless GNOME Shell on its own D-Bus session bus, with this
-# extension loaded from the source tree. Nothing of the running desktop
+# extension installed from the source tree. Nothing of the running desktop
 # session is touched: data, config, cache and GSettings (keyfile backend)
 # all live in WORKDIR.
 #
@@ -18,8 +18,12 @@ uuid=window-pins@robindavidss0n.github.io
 if [[ $# -lt 2 || $2 != --inner ]]; then
     mkdir -p "$work"/{data/gnome-shell/extensions,config,cache,state}
     rm -f "$work/bus"
-    ln -sfn "$repo/extension" "$work/data/gnome-shell/extensions/$uuid"
-    glib-compile-schemas "$repo/extension/schemas"
+    # Installed the way users install it; a restart of the test shell on
+    # the same WORKDIR keeps what is installed.
+    if [[ ! -f $work/data/gnome-shell/extensions/$uuid/current ]]; then
+        "$repo/tools/install.sh" --dest "$work/data/gnome-shell/extensions/$uuid" --no-reload \
+            > "$work/install.log"
+    fi
     # A helper that turns on unsafe mode, so the tests can use
     # org.gnome.Shell.Eval to inspect windows.
     helper="$work/data/gnome-shell/extensions/wp-test-helper@local"
@@ -42,7 +46,8 @@ else
 fi
 gsettings set org.gnome.shell disable-user-extensions false
 gsettings set org.gnome.shell welcome-dialog-last-shown-version '999'
-gsettings --schemadir "$repo/extension/schemas" set org.gnome.shell.extensions.window-pins debug true
+gsettings --schemadir "$XDG_DATA_HOME/gnome-shell/extensions/$uuid/schemas" \
+    set org.gnome.shell.extensions.window-pins debug true
 echo "$DBUS_SESSION_BUS_ADDRESS" > "$work/bus"
 # Command-line virtual monitors all have identical EDID data (serial
 # included), so the extension tells them apart by connector order. They

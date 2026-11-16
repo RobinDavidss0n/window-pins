@@ -31,25 +31,60 @@ Requires GNOME Shell 50.
 
 ## Install
 
-From a release zip, or one built with `make zip`:
+From a clone of this repository:
+
+```sh
+make install
+```
+
+Or from a release zip, or one built with `make zip`:
 
 ```sh
 gnome-extensions install --force window-pins@robindavidss0n.github.io.shell-extension.zip
 ```
 
-Or, for development, link the source tree (compiles the settings schema
-first):
-
-```sh
-make link
-```
-
-Then log out and back in (on Wayland GNOME Shell only loads new
-extensions at login), and enable it:
+The first time, log out and back in (on Wayland GNOME Shell only loads
+new extensions at login), and enable it:
 
 ```sh
 gnome-extensions enable window-pins@robindavidss0n.github.io
 ```
+
+## Update
+
+```sh
+git pull
+make install        # or: make reload, the same thing
+```
+
+This installs the new code and reloads it in the running session, no
+logout needed: it turns the extension off and on, waits until the new
+version reports that it runs, and says so. Pins, setups and where open
+windows are all carry over.
+
+How it works: GNOME Shell caches the extension's JavaScript modules for
+the whole session, so turning an extension off and on normally runs the
+old code again. window-pins is split into a small loader (`extension.js`)
+and the actual code. Each install puts the code in a new directory,
+`versions/<id>/` (the git commit, `-dirty` for uncommitted changes, and
+the time), and writes its id to the file `current`. The loader imports
+`versions/<id>/main.js` on every enable, so a new version runs entirely
+from new files. The three newest versions are kept. The code of earlier
+versions stays in memory until you log out, which costs a little memory.
+
+If the new version fails to load, the loader logs `cannot load version
+<id>: ...` and runs the previous version (`previous`) instead, and
+`make install` reports both lines.
+
+What still needs a logout:
+
+- The first install.
+- A change to the loader (`extension.js`) or `metadata.json`: the shell
+  keeps the ones it read at login. `make install` notices and says "log
+  out and back in once" instead of reloading.
+
+A change to the settings schema takes effect with the reload: new keys
+are there at once.
 
 ## Using it
 
@@ -155,8 +190,12 @@ shortcut is the `pin-window` key in the same schema.
   on its own D-Bus session, with virtual monitors turned on and off and
   hotplugged, and test windows. It needs `gst-launch-1.0` with the
   PipeWire plugin, and leaves the running session and its settings alone.
-- `make zip` builds the zip; `make link` links the source tree for
-  development.
+- `make install` (or `make reload`) installs and reloads, see Update;
+  `make zip` builds the zip.
+- `src/` is the code that goes into `versions/<id>/`; `extension/` holds
+  the loader, `metadata.json` and the settings schema. GObject classes
+  get a GType name per version (`src/shell/gtype.js`): the same name
+  cannot be registered twice in one session.
 
 ## License
 

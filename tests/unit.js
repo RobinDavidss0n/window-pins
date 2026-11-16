@@ -3,16 +3,16 @@
 import system from 'system';
 
 import {assignMonitorIds, defaultSetupName, logicalMonitorId, monitorBaseId, setupKeyOf}
-    from '../extension/lib/setup.js';
-import {landedAt, sameRect, toAbsolute, toRelative} from '../extension/lib/geometry.js';
-import {isAppWindow} from '../extension/lib/filter.js';
+    from '../src/lib/setup.js';
+import {landedAt, sameRect, toAbsolute, toRelative} from '../src/lib/geometry.js';
+import {isAppWindow} from '../src/lib/filter.js';
 import {assignPins, chooseClosedSpot, decideNewWindow, exactTitlePinsSkipped, planRestore, titleSimilarity}
-    from '../extension/lib/matching.js';
-import {MonitorSettler, QuietTimer} from '../extension/lib/timing.js';
+    from '../src/lib/matching.js';
+import {MonitorSettler, QuietTimer} from '../src/lib/timing.js';
 import {
     CLOSED_MAX_AGE_MS, addClosedEntries, closeStaleOpenWindows, emptyState, heldPinIds, newPinId,
     normalizeState, pruneState,
-} from '../extension/lib/state.js';
+} from '../src/lib/state.js';
 
 let passed = 0;
 const failures = [];

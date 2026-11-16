@@ -64,8 +64,8 @@ with_win() {
     ev "(() => { const w = global.display.list_all_windows().find(w => w.get_title() === $quoted); if (!w) return 'no such window'; $js })()"
 }
 
-# The extension's engine in the nested shell.
-ENGINE="Main.extensionManager.lookup('$WP_UUID').stateObj._engine"
+# The running version's engine (the extension object is the loader).
+ENGINE="Main.extensionManager.lookup('$WP_UUID').stateObj._impl._engine"
 
 # Press Super+KEY (a Clutter key name such as Left) on a virtual keyboard,
 # so GNOME's own keybindings run, e.g. edge tiling.
