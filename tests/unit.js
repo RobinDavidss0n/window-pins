@@ -6,7 +6,7 @@ import {assignMonitorIds, defaultSetupName, logicalMonitorId, monitorBaseId, set
     from '../src/lib/setup.js';
 import {landedAt, sameRect, toAbsolute, toRelative} from '../src/lib/geometry.js';
 import {isAppWindow} from '../src/lib/filter.js';
-import {assignPins, chooseClosedSpot, decideNewWindow, exactTitlePinsSkipped, planRestore, titleSimilarity}
+import {assignPins, chooseClosedSpot, decideNewWindow, exactTitlePinsSkipped, planRestore, titleSimilarity, titlesAlike}
     from '../src/lib/matching.js';
 import {MonitorSettler, QuietTimer} from '../src/lib/timing.js';
 import {
@@ -269,14 +269,14 @@ test('a held pin is not taken even by an exact title', () => {
     eq(assignPins([{key: '1', wmClass: 'chrome', title: 'Mail'}], pins, new Set(['a'])).size, 0);
 });
 
-test('closed spot: same title in this setup, else the most recent in this setup', () => {
+test('closed spot: same title in this setup, nothing for an unrelated title', () => {
     const entries = [
         {title: 'A', setupKey: 'S', closedAt: 10, ...spot('a')},
         {title: 'B', setupKey: 'S', closedAt: 30, ...spot('b')},
         {title: 'A', setupKey: 'T', closedAt: 50, ...spot('c')},
     ];
     eq(chooseClosedSpot(entries, 'A', 'S').monitor, 'a');
-    eq(chooseClosedSpot(entries, 'Z', 'S').monitor, 'b');
+    eq(chooseClosedSpot(entries, 'Z', 'S'), null);
     eq(chooseClosedSpot(entries, 'A', 'T').monitor, 'c');
     eq(chooseClosedSpot(entries, 'A', 'U'), null);
 });
@@ -289,7 +289,28 @@ test('closed spot: else the most similar title in this setup, newest on a tie', 
     ];
     eq(chooseClosedSpot(entries, 'Todo - RD - work - Obsidian', 'S').monitor, 'work');
     eq(chooseClosedSpot(entries, 'Todo - HA - personal - Obsidian', 'S').monitor, 'home');
-    eq(chooseClosedSpot(entries, 'Unrelated', 'S').monitor, 'home');
+    eq(chooseClosedSpot(entries, 'Unrelated', 'S'), null);
+});
+
+test('titles are alike when they share half the words of the shorter one', () => {
+    eq(titlesAlike('Gmail', 'Gmail - Inkorgen (2) - name@work - Work e-post'), true);
+    eq(titlesAlike('Settings review - personal - Obsidian 1.15.1', 'TODO - HA - personal - Obsidian 1.15.1'), true);
+    eq(titlesAlike('Tibber vs own battery control', 'Desktop feed readability'), false);
+    eq(titlesAlike('Machine upkeep and handoff audits', 'Slow tour steps and backups'), false);
+    eq(titlesAlike('New session', 'Claude'), false);
+    eq(titlesAlike(null, 'x'), false);
+});
+
+test('closed spot: a new Claude chat window does not take another chat\'s spot', () => {
+    const entries = [
+        {title: 'Desktop feed readability', setupKey: 'S', closedAt: 30, ...spot('feed')},
+        {title: 'Machine upkeep and handoff audits', setupKey: 'S', closedAt: 20, ...spot('upkeep')},
+        {title: 'Claude', setupKey: 'S', closedAt: 10, ...spot('blank')},
+    ];
+    eq(chooseClosedSpot(entries, 'Tibber vs own battery control', 'S'), null);
+    eq(chooseClosedSpot(entries, 'New session', 'S'), null);
+    eq(chooseClosedSpot(entries, 'Machine upkeep and handoff audits', 'S').monitor, 'upkeep');
+    eq(chooseClosedSpot(entries, 'Machine upkeep audits', 'S').monitor, 'upkeep');
 });
 
 test('new window: pins take precedence over closed spots', () => {

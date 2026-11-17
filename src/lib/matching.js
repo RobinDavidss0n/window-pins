@@ -120,10 +120,28 @@ export function exactTitlePinsSkipped(window, pins, taken) {
 }
 
 /**
+ * Whether two titles are alike enough to be the same window: they share at
+ * least half the words of the shorter one. Apps such as Claude name each
+ * window after its content ("Desktop feed readability", "Tibber vs own
+ * battery control"); a filler word like "and" in common is not enough.
+ *
+ * @param {string|null} title
+ * @param {string|null} other
+ * @returns {boolean}
+ */
+export function titlesAlike(title, other) {
+    const shorter = Math.min(titleWords(title).length, titleWords(other).length);
+    const shared = titleSimilarity(title, other);
+    return shared > 0 && shared * 2 >= shorter;
+}
+
+/**
  * Pick the remembered spot of a closed window for a new window of the
  * same app: the most recent one with the same title in this setup,
  * otherwise the one in this setup with the most similar title (see
- * titleSimilarity), the most recently closed on a tie.
+ * titleSimilarity), the most recently closed on a tie. A closed window
+ * whose title is not alike (see titlesAlike) is not used: the new window
+ * is a different one.
  *
  * @param {Array<{title: string, setupKey: string, closedAt: number}>} entries
  *   closed-window entries of the app
@@ -135,7 +153,8 @@ export function chooseClosedSpot(entries, title, setupKey) {
     const inSetup = entries
         .filter(e => e.setupKey === setupKey)
         .sort((a, b) => b.closedAt - a.closedAt);
-    return inSetup.find(e => e.title === title) ?? mostSimilar(inSetup, title);
+    return inSetup.find(e => e.title === title) ??
+        mostSimilar(inSetup.filter(e => titlesAlike(title, e.title)), title);
 }
 
 /**
