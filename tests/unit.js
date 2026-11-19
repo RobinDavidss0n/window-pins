@@ -8,7 +8,7 @@ import {landedAt, sameRect, toAbsolute, toRelative} from '../src/lib/geometry.js
 import {isAppWindow} from '../src/lib/filter.js';
 import {assignPins, chooseClosedSpot, decideNewWindow, exactTitlePinsSkipped, planRestore, titleSimilarity, titlesAlike}
     from '../src/lib/matching.js';
-import {MonitorSettler, QuietTimer} from '../src/lib/timing.js';
+import {MonitorSettler, QuietTimer, landingStep} from '../src/lib/timing.js';
 import {
     CLOSED_MAX_AGE_MS, addClosedEntries, closeStaleOpenWindows, emptyState, heldPinIds, newPinId,
     normalizeState, pruneState,
@@ -415,6 +415,23 @@ test('monitor settler: one start and one settle per burst', () => {
     s.poke();
     t.advance(2000);
     eq(events, ['start@0', 'settled@2900', 'start@2900', 'settled@4400']);
+});
+
+test('landing: a window that arrived is maximized, whatever else holds', () => {
+    for (const visible of [true, false]) {
+        for (const timing of [true, false])
+            eq(landingStep({landed: true, visible, timing}), 'apply', `visible ${visible}, timing ${timing}:`);
+    }
+});
+
+test('landing: the timeout starts only once the window is on the shown workspace', () => {
+    eq(landingStep({landed: false, visible: true, timing: false}), 'start-timeout');
+    eq(landingStep({landed: false, visible: false, timing: false}), 'defer');
+});
+
+test('landing: a running timeout goes on, also when the window is hidden again', () => {
+    eq(landingStep({landed: false, visible: true, timing: true}), 'wait');
+    eq(landingStep({landed: false, visible: false, timing: true}), 'wait');
 });
 
 // --- state.js ---------------------------------------------------------------

@@ -19,7 +19,8 @@ import {
 import {readLayout, refreshWorkAreas} from './monitors.js';
 import {shellInstanceId} from './store.js';
 import {
-    applySpot, appNameOf, cancelPendingPlacements, describeSpot, isTrackable, readSpot, windowKey,
+    applySpot, appNameOf, cancelPendingPlacements, describeSpot, dropDeferredPlacement, isTrackable,
+    readSpot, windowKey,
 } from './windows.js';
 
 const timers = {
@@ -121,11 +122,16 @@ export class Engine {
                 refreshWorkAreas(this._layout);
         });
         // A new window the user starts moving or resizing before it is
-        // placed stays where the user puts it.
+        // placed stays where the user puts it. A window on a hidden
+        // workspace that still waits to be maximized in one direction is
+        // then not maximized later.
         this._connect(global.display, 'grab-op-begin', (_d, win) => {
-            const entry = win ? this._windows.get(windowKey(win)) : null;
+            if (!win)
+                return;
+            const entry = this._windows.get(windowKey(win));
             if (entry?.phase === 'waiting')
                 entry.grabbed = true;
+            dropDeferredPlacement(win);
         });
         this._connect(global.display, 'notify::focus-window', () => {
             const win = global.display.focus_window;
@@ -309,6 +315,9 @@ export class Engine {
         this._log.debug('monitor layout changing; recording paused');
         for (const entry of this._windows.values())
             entry.recordTimer.cancel();
+        // Waits for windows to land on spots of the layout that is going
+        // away; the restore after the change places windows for the new one.
+        cancelPendingPlacements();
     }
 
     /**

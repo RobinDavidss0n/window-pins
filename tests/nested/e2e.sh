@@ -186,6 +186,53 @@ gjs -m "$here/display.js" all > /dev/null
 settle
 expect_eq "back on the left half of B" "$(frame_flags 'Tile left')" "$tiled"
 
+# Monitor A, the primary: windows on B are on all workspaces. Apps may
+# resize a window on a hidden workspace only once it is shown, so the
+# wait to maximize it must not time out before that. The test client
+# resizes while hidden, so it is stopped while its workspace is hidden.
+step "a window tiled on A goes back to its half on a hidden workspace, maximized once that is shown"
+show_workspace() { ev "global.workspace_manager.get_workspace_by_index($1).activate(global.get_current_time())" > /dev/null; }
+hidden_pid=$(open_app org.example.Hidden 'Tile hidden')
+pids+=("$hidden_pid")
+settle
+move "Tile hidden" 300 300 500 400
+with_win "Tile hidden" "w.activate(global.get_current_time()); return 'ok'" > /dev/null
+sleep 0.5
+super_key Left
+sleep 1.5
+with_win "Tile hidden" "w.change_workspace_by_index(1, false); return 'ok'" > /dev/null
+sleep 1
+hidden_tiled=$(frame_flags "Tile hidden")
+expect_eq "tiled to the left half of A, maximized vertically" "${hidden_tiled:0:3}${hidden_tiled: -2}" '"0 2"'
+gjs -m "$here/display.js" only Meta-0 > /dev/null
+settle
+# Elsewhere in 'A only', on the shown workspace.
+with_win "Tile hidden" "w.change_workspace_by_index(0, false); w.unmaximize(); return 'ok'" > /dev/null
+sleep 0.5
+move "Tile hidden" 300 300 500 400
+sleep 1
+expect_eq "untiled in 'A only'" "$(frame_flags 'Tile hidden')" '"0 300 300 500 400 0"'
+log_mark=$(wc -l < "$work/shell.log")
+kill -STOP "$hidden_pid"
+# The restore moves it back to its half and to workspace 1, which is
+# hidden. It stays hidden longer than the 2 s a shown window gets.
+gjs -m "$here/display.js" all > /dev/null
+settle 5
+restore_log=$(tail -n +"$((log_mark + 1))" "$work/shell.log")
+grep -a -q '"Tile hidden" is on a hidden workspace' <<< "$restore_log" &&
+    echo "   ok: the wait is held back for the hidden workspace" ||
+    { echo "   FAIL: no held-back wait logged"; fails=$((fails + 1)); }
+grep -a -q '"Tile hidden" did not reach its spot' <<< "$restore_log" &&
+    { echo "   FAIL: the wait timed out while its workspace was hidden"; fails=$((fails + 1)); } ||
+    echo "   ok: no timeout while its workspace was hidden"
+show_workspace 1
+kill -CONT "$hidden_pid"
+sleep 2.5
+expect_eq "on its half once workspace 1 is shown" "$(frame_flags 'Tile hidden')" "$hidden_tiled"
+show_workspace 0
+close_win "Tile hidden"
+sleep 1
+
 step "remember closed windows (switched on for Gamma only)"
 ev "$ENGINE.setRemember('org.example.Gamma', 'Gamma', true)" > /dev/null
 pids+=("$(open_app org.example.Gamma 'Gamma one')")

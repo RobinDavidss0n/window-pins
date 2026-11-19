@@ -6,6 +6,7 @@ import Shell from 'gi://Shell';
 
 import {isAppWindow} from '../lib/filter.js';
 import {landedAt, toAbsolute, toRelative, sameRect} from '../lib/geometry.js';
+import {LAND_TIMEOUT_MS, landingStep} from '../lib/timing.js';
 
 const BOTH = Meta.MaximizeFlags.BOTH;
 
@@ -94,8 +95,14 @@ function isAt(win, spot, monitor, target) {
     return sameRect(win.get_frame_rect(), target);
 }
 
-/** Waits of maximizePartlyAt still running, so disable can stop them. */
-const pendingWaits = new Set();
+/** Waits of maximizePartlyAt still running, by window, so a new placement
+ * of the window, a monitor change or disable can stop them. */
+const pendingWaits = new Map();
+
+/** Whether the window is on the workspace that is shown, or on all. */
+function onActiveWorkspace(win) {
+    return win.located_on_workspace(global.workspace_manager.get_active_workspace());
+}
 
 /**
  * Maximize a window in one direction once its frame has arrived at
@@ -103,8 +110,16 @@ const pendingWaits = new Set();
  * direction, so a half-tiled window comes back on its half. Doing it
  * before the move has landed (a Wayland client acks the new size later,
  * often only after a move to another monitor) would keep the old x and
- * width. When the frame does not arrive within 2 s, the window is left
- * where it is, not maximized.
+ * width.
+ *
+ * When the frame does not arrive within LAND_TIMEOUT_MS, the window is
+ * left where it is, not maximized. That time only starts counting once
+ * the window is on the workspace that is shown: a Wayland client may not
+ * ack a new size for a window on a hidden workspace until the workspace
+ * is shown, which can be any time later. Until then the wait has no
+ * timeout; it is dropped when the user grabs the window, the window is
+ * placed again or unmanaged, the monitors change, or the extension is
+ * disabled.
  *
  * Mutter has no public call for its edge-tile mode, so the window ends
  * up maximized vertically at half width rather than edge-tiled; it looks
@@ -115,40 +130,79 @@ function maximizePartlyAt(win, flags, target, log) {
         win.set_maximize_flags(flags);
         return;
     }
-    const wait = {ids: [], timeoutId: 0};
+    const wait = {ids: [], managerId: 0, timeoutId: 0, deferred: false};
+    const manager = global.workspace_manager;
     const finish = apply => {
-        pendingWaits.delete(wait);
+        if (pendingWaits.get(win) === wait)
+            pendingWaits.delete(win);
         for (const id of wait.ids)
             win.disconnect(id);
+        wait.ids = [];
+        if (wait.managerId)
+            manager.disconnect(wait.managerId);
+        wait.managerId = 0;
         if (wait.timeoutId)
             GLib.source_remove(wait.timeoutId);
         wait.timeoutId = 0;
         if (apply)
             win.set_maximize_flags(flags);
     };
-    const check = () => {
-        if (landedAt(win.get_frame_rect(), target))
-            finish(true);
+    const startTimeout = () => {
+        wait.timeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, LAND_TIMEOUT_MS, () => {
+            wait.timeoutId = 0;
+            finish(false);
+            log?.(`${win.get_wm_class()} "${win.get_title()}" did not reach its spot; ` +
+                'left there without maximizing it in one direction');
+            return GLib.SOURCE_REMOVE;
+        });
     };
+    const check = () => {
+        const step = landingStep({
+            landed: landedAt(win.get_frame_rect(), target),
+            visible: onActiveWorkspace(win),
+            timing: wait.timeoutId !== 0,
+        });
+        if (step === 'apply') {
+            finish(true);
+        } else if (step === 'start-timeout') {
+            startTimeout();
+        } else if (step === 'defer' && !wait.deferred) {
+            wait.deferred = true;
+            log?.(`${win.get_wm_class()} "${win.get_title()}" is on a hidden workspace; ` +
+                'will maximize it in one direction once that workspace is shown');
+        }
+    };
+
     wait.cancel = () => finish(false);
     wait.ids = [
         win.connect('position-changed', check),
         win.connect('size-changed', check),
+        // Whether the window is shown changes when it moves to another
+        // workspace, or another workspace is shown (below).
+        win.connect('workspace-changed', check),
         win.connect('unmanaging', () => finish(false)),
     ];
-    wait.timeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 2000, () => {
-        wait.timeoutId = 0;
-        finish(false);
-        log?.(`${win.get_wm_class()} "${win.get_title()}" did not reach its spot; ` +
-            'left there without maximizing it in one direction');
-        return GLib.SOURCE_REMOVE;
-    });
-    pendingWaits.add(wait);
+    wait.managerId = manager.connect('active-workspace-changed', check);
+    pendingWaits.set(win, wait);
+    check();
 }
 
-/** Stop waiting for windows to arrive (the extension is disabled). */
+/** Stop waiting for windows to arrive (the monitors change again, or the
+ * extension is disabled). */
 export function cancelPendingPlacements() {
-    for (const wait of [...pendingWaits])
+    for (const wait of [...pendingWaits.values()])
+        wait.cancel();
+}
+
+/**
+ * The user started moving or resizing the window: a wait to maximize it
+ * that is held back until its workspace is shown is dropped, so the
+ * window is not changed under the user later. A wait whose timeout runs
+ * goes on.
+ */
+export function dropDeferredPlacement(win) {
+    const wait = pendingWaits.get(win);
+    if (wait?.deferred && !wait.timeoutId)
         wait.cancel();
 }
 
@@ -165,12 +219,16 @@ export function applySpot(win, spot, layout, log = null) {
     const monitor = layout.monitors.find(m => m.id === spot.monitor);
     if (!monitor)
         return 'no-monitor';
+    // A wait from an earlier placement would maximize the window for that
+    // placement's spot.
+    pendingWaits.get(win)?.cancel();
     const target = toAbsolute(spot.rect, monitor.workArea);
     if (isAt(win, spot, monitor, target))
         return 'already-there';
     if (!win.allows_move())
         return 'not-movable';
 
+    let maximizeLater = 0;
     if (spot.fullscreen && win.is_fullscreen()) {
         if (win.get_monitor() !== monitor.index)
             win.move_to_monitor(monitor.index);
@@ -188,8 +246,10 @@ export function applySpot(win, spot, layout, log = null) {
         win.move_resize_frame(false, target.x, target.y, target.width, target.height);
         if (spot.maximized === BOTH)
             win.maximize();
+        else if (spot.maximized && landedAt(win.get_frame_rect(), target))
+            win.set_maximize_flags(spot.maximized);
         else if (spot.maximized)
-            maximizePartlyAt(win, spot.maximized, target, log);
+            maximizeLater = spot.maximized;
         if (spot.fullscreen)
             win.make_fullscreen();
     }
@@ -202,6 +262,10 @@ export function applySpot(win, spot, layout, log = null) {
         if (workspaceOf(win) !== index)
             win.change_workspace_by_index(index, false);
     }
+    // After the workspace change: whether the wait may time out depends on
+    // the window's workspace being shown.
+    if (maximizeLater)
+        maximizePartlyAt(win, maximizeLater, target, log);
     return 'moved';
 }
 

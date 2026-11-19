@@ -127,7 +127,9 @@ A window tiled to half of a monitor (Super+Left/Right, or dragged to
 the edge) comes back on that half, maximized vertically. GNOME offers
 extensions no way to put a window in its edge-tile mode, so it is not
 edge-tiled in GNOME's sense: it looks the same, and Super+Left/Right
-tile it again. A pin made on a tiled window keeps that half too.
+tile it again. A pin made on a tiled window keeps that half too. Apps
+often resize a window on a workspace you are not looking at only once
+that workspace is shown; such a window is maximized vertically then.
 
 When a new window opens, window-pins waits until its title has settled
 (1 s without a change, at most 3 s after it is shown, because browsers and
