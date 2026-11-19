@@ -23,6 +23,9 @@
 #
 # After a reload it waits for the loader's "running version <id>" line in
 # the journal (or in the file $WP_SHELL_LOG, for the nested test shell).
+# When that does not come and the extension is not running, it turns the
+# extension off and on once more; if that fails too, it says how to turn
+# it back on.
 set -euo pipefail
 
 KEEP=3
@@ -112,7 +115,11 @@ if ((loader_changed)); then
     exit 0
 fi
 
-state=$(gnome-extensions info "$uuid" 2> /dev/null | sed -n 's/^ *State: *//p' || true)
+ext_state() {
+    gnome-extensions info "$uuid" 2> /dev/null | sed -n 's/^ *State: *//p' || true
+}
+
+state=$(ext_state)
 case $state in
     ACTIVE | ENABLED) ;;
     "")
@@ -125,9 +132,20 @@ case $state in
         ;;
 esac
 
-since=$(date +%s)
-gnome-extensions disable "$uuid"
-gnome-extensions enable "$uuid"
+# Turn the extension off, wait until the shell has turned it off (at most
+# 5 s), and turn it on. Sent back to back, the shell has been seen to
+# process the disable and miss the enable, leaving the extension enabled
+# in the settings but not running.
+restart_extension() {
+    gnome-extensions disable "$uuid"
+    for _ in $(seq 20); do
+        case $(ext_state) in
+            ACTIVE | ENABLED | DEACTIVATING) sleep 0.25 ;;
+            *) break ;;
+        esac
+    done
+    gnome-extensions enable "$uuid"
+}
 
 shell_log() {
     if [[ -n ${WP_SHELL_LOG:-} ]]; then
@@ -136,24 +154,49 @@ shell_log() {
         journalctl --user --since "@$since" -o cat 2> /dev/null
     fi
 }
-for _ in $(seq 20); do
-    sleep 0.25
-    lines=$(shell_log | grep -a '\[window-pins\]' || true)
-    if grep -q "running version $id\$" <<< "$lines"; then
-        echo "Reloaded: version $id is running."
-        ((schema_changed)) && echo "The settings schema changed; new keys are available now."
-        exit 0
-    fi
-    if grep -q "cannot load version $id" <<< "$lines"; then
-        sleep 0.5
+
+# Exits when the new version reports running or failing to load; returns
+# when neither shows within 5 s.
+wait_for_version() {
+    for _ in $(seq 20); do
+        sleep 0.25
         lines=$(shell_log | grep -a '\[window-pins\]' || true)
-        echo "Version $id failed to load:" >&2
-        grep -a "cannot load version $id" <<< "$lines" | tail -1 | sed 's/^.*\[window-pins\] /  /' >&2
-        running=$(grep -a "running version" <<< "$lines" | tail -1 | sed 's/^.*\[window-pins\] /  /')
-        echo "${running:-  no version is running}" >&2
-        exit 1
-    fi
-done
-echo "Turned the extension off and on, but saw no \"running version $id\" in the log;" >&2
-echo "check with: journalctl --user -o cat | grep '\\[window-pins\\]'" >&2
+        if grep -q "running version $id\$" <<< "$lines"; then
+            echo "Reloaded: version $id is running."
+            ((schema_changed)) && echo "The settings schema changed; new keys are available now."
+            exit 0
+        fi
+        if grep -q "cannot load version $id" <<< "$lines"; then
+            sleep 0.5
+            lines=$(shell_log | grep -a '\[window-pins\]' || true)
+            echo "Version $id failed to load:" >&2
+            grep -a "cannot load version $id" <<< "$lines" | tail -1 | sed 's/^.*\[window-pins\] /  /' >&2
+            running=$(grep -a "running version" <<< "$lines" | tail -1 | sed 's/^.*\[window-pins\] /  /')
+            echo "${running:-  no version is running}" >&2
+            exit 1
+        fi
+    done
+}
+
+since=$(date +%s)
+restart_extension
+wait_for_version
+state=$(ext_state)
+if [[ $state != ACTIVE && $state != ENABLED ]]; then
+    echo "The extension did not come back on (state ${state:-unknown}); turning it off and on once more."
+    restart_extension
+    wait_for_version
+    state=$(ext_state)
+fi
+
+if [[ $state == ACTIVE || $state == ENABLED ]]; then
+    echo "Turned the extension off and on, but saw no \"running version $id\" in the log;" >&2
+    echo "check with: journalctl --user -o cat | grep '\\[window-pins\\]'" >&2
+else
+    echo "window-pins did not come back on and may now be OFF (state ${state:-unknown})." >&2
+    echo "Turn it back on with:" >&2
+    echo "  gnome-extensions disable $uuid" >&2
+    echo "  sleep 1" >&2
+    echo "  gnome-extensions enable $uuid" >&2
+fi
 exit 1
