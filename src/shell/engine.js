@@ -3,9 +3,9 @@
 //
 // A window is placed once when it opens, and once per switch to another
 // setup. A placed window is checked once it has settled on the shown
-// workspace and placed again once if it is not on its spot. Apart from
-// that it is never corrected: moves by the user, GNOME or other
-// extensions are recorded, not undone.
+// workspace and placed again once if it is not on its spot; until then
+// where it is is not recorded. Apart from that it is never corrected:
+// moves by the user, GNOME or other extensions are recorded, not undone.
 
 import {decideNewWindow, exactTitlePinsSkipped, planRestore} from '../lib/matching.js';
 import {defaultSetupName} from '../lib/setup.js';
@@ -21,7 +21,7 @@ import {shellInstanceId} from './store.js';
 import {timers} from './timers.js';
 import {
     applySpot, appNameOf, cancelPendingPlacements, describeSpot, dropPlacement, isTrackable,
-    readSpot, windowKey,
+    placementInFlight, readSpot, windowKey,
 } from './windows.js';
 
 function describeWindow(win) {
@@ -108,7 +108,7 @@ export class Engine {
         // A new window the user starts moving or resizing before it is
         // placed stays where the user puts it. A placed window the user
         // grabs before it was found on its spot is not checked or placed
-        // again.
+        // again, and is recorded from then on as usual.
         this._connect(global.display, 'grab-op-begin', (_d, win) => {
             if (!win)
                 return;
@@ -146,8 +146,35 @@ export class Engine {
         this._saveTimer.cancel();
     }
 
+    /**
+     * Put a followed window on a spot. While the placement is in flight
+     * (moved, and not yet found on the spot by the check), where the
+     * window is is not recorded, and its memory holds the spot it was
+     * sent to: a window closed, or a layout change, before it gets there
+     * keeps that spot. Once it is found on its spot it is recorded as
+     * usual; when the check gives up, the memory keeps the spot until the
+     * window changes again.
+     */
     _apply(entry, spot) {
-        return applySpot(entry.win, spot, this._layout, {log: message => this._log.debug(message)});
+        const result = applySpot(entry.win, spot, this._layout, {
+            log: message => this._log.debug(message),
+            onDone: outcome => {
+                if (outcome === 'confirmed' && this._windows.get(entry.key) === entry)
+                    this._recordSoon(entry);
+            },
+        });
+        if (result === 'moved') {
+            const mem = this._memoryOf(entry);
+            const setupKey = this._layout.key;
+            // A pin or closed window's spot; a remembered spot is already there.
+            if (mem.spots[setupKey] !== spot) {
+                const {monitor, workspace, rect, maximized, fullscreen} = spot;
+                mem.spots[setupKey] = {
+                    monitor, workspace, rect: {...rect}, maximized, fullscreen, at: Date.now(),
+                };
+            }
+        }
+        return result;
     }
 
     // --- Following windows -------------------------------------------------
@@ -249,14 +276,20 @@ export class Engine {
     // --- Recording ------------------------------------------------------------
 
     _recordSoon(entry) {
-        if (entry.phase !== 'tracked' || this._settler.settling)
+        if (entry.phase !== 'tracked' || this._settler.settling || placementInFlight(entry.win))
             return;
         entry.recordTimer.poke();
     }
 
-    /** Record where the window is now, for the current setup. */
+    /**
+     * Record where the window is now, for the current setup. A window
+     * whose placement is in flight is not recorded (see _apply), also not
+     * by the snapshot before a layout change or when it closes.
+     */
     _record(entry, force = false) {
         if (entry.phase !== 'tracked' || (this._settler.settling && !force))
+            return;
+        if (placementInFlight(entry.win))
             return;
         const mem = this._memoryOf(entry);
         const setupKey = this._layout.key;

@@ -136,7 +136,9 @@ Every window window-pins moves (here, or when a new window opens) is
 checked once it is on the workspace that is shown and has not moved for
 a second. If it is not on its spot (some apps move or resize their
 windows again on their own), it is placed there once more; if it still
-does not stay, it is left where it is.
+does not stay, it is left where it is. Until it is found on its spot,
+where it is is not remembered: a window closed before then leaves the
+spot it was sent to.
 
 When a new window opens, window-pins waits until its title has settled
 (1 s without a change, at most 3 s after it is shown, because browsers and
