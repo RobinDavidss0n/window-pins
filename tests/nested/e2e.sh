@@ -233,6 +233,80 @@ show_workspace 0
 close_win "Tile hidden"
 sleep 1
 
+# The restore moves a window back to its spot on hidden workspace 1, and
+# then the window is pushed off that spot from outside, like Wayland
+# clients that resize their window when the setup changes. It must not be
+# recorded there, and it is placed again once its workspace is shown.
+step "a window pushed off its spot after the restore is placed again; that spot stays remembered"
+pids+=("$(open_app org.example.Drift 'Drift one')")
+settle
+move "Drift one" 200 200 500 400
+with_win "Drift one" "w.change_workspace_by_index(1, false); return 'ok'" > /dev/null
+sleep 1
+saved_rect() {
+    with_win "$1" "return JSON.stringify($ENGINE._state.openWindows[String(w.get_stable_sequence())]
+        .spots[$ENGINE.currentSetup.key]?.rect)"
+}
+drift_rect=$(saved_rect "Drift one")
+drift_frame=$(frame_flags "Drift one")
+gjs -m "$here/display.js" only Meta-0 > /dev/null
+settle
+# Elsewhere in 'A only', on the same hidden workspace.
+move "Drift one" 600 300 500 400
+sleep 1
+log_mark=$(wc -l < "$work/shell.log")
+gjs -m "$here/display.js" all > /dev/null
+for _ in $(seq 50); do
+    [[ $(frame_flags "Drift one") == "$drift_frame" ]] && break
+    sleep 0.1
+done
+expect_eq "moved back to its spot by the restore" "$(frame_flags 'Drift one')" "$drift_frame"
+move "Drift one" 900 500 600 450
+sleep 2
+expect_eq "where it was pushed is not recorded" "$(saved_rect 'Drift one')" "$drift_rect"
+show_workspace 1
+sleep 3
+expect_eq "back on its spot once workspace 1 is shown" "$(frame_flags 'Drift one')" "$drift_frame"
+expect_eq "its spot is still the one remembered" "$(saved_rect 'Drift one')" "$drift_rect"
+tail -n +"$((log_mark + 1))" "$work/shell.log" | grep -a -q '"Drift one" is on its spot after placing it again' &&
+    echo "   ok: placed again" || { echo "   FAIL: not placed again"; fails=$((fails + 1)); }
+show_workspace 0
+close_win "Drift one"
+sleep 1
+
+# A window sent to a spot on hidden workspace 1 whose client is stopped
+# never gets there (like a Wayland client that only follows once its
+# workspace is shown). It is closed (its client killed) before it arrives.
+step "a window closed before it reached its spot keeps that spot as its closed spot"
+ev "$ENGINE.setRemember('org.example.Late', 'Late', true)" > /dev/null
+pids+=("$(open_app org.example.Late 'Late one')")
+settle
+move "Late one" 300 250 450 300
+with_win "Late one" "w.change_workspace_by_index(1, false); return 'ok'" > /dev/null
+sleep 1
+close_win "Late one"
+sleep 1
+closed_spot() {
+    ev "JSON.stringify(($ENGINE._state.closed['org.example.Late'] ?? [])
+        .filter(e => e.title === 'Late one' && e.setupKey === $ENGINE.currentSetup.key)
+        .map(e => [e.monitor, e.workspace, e.rect]))"
+}
+late_spot=$(closed_spot)
+expect_eq "closed spot remembered" "$([[ $late_spot == *x* ]] && echo yes)" yes
+late_pid=$(open_app org.example.Late 'Late one')
+pids+=("$late_pid")
+for _ in $(seq 50); do
+    [[ $(with_win 'Late one' "return String(w.get_compositor_private()?.visible ?? false)") == '"true"' ]] && break
+    sleep 0.1
+done
+kill -STOP "$late_pid"
+# Placed (1 s after it is shown) while its client cannot follow.
+settle
+echo "   (closed at: $(frame_flags 'Late one'), workspace $(with_win 'Late one' 'return String(w.get_workspace().index())'))"
+kill -KILL "$late_pid"
+sleep 1
+expect_eq "closed spot is the one it was sent to" "$(closed_spot)" "$late_spot"
+
 step "remember closed windows (switched on for Gamma only)"
 ev "$ENGINE.setRemember('org.example.Gamma', 'Gamma', true)" > /dev/null
 pids+=("$(open_app org.example.Gamma 'Gamma one')")

@@ -24,8 +24,9 @@ setup.
   the next window of that app opens there.
 
 It never fights other extensions or the user: a window is placed once
-when it opens and once per switch of setup, and never corrected after
-that. Tiling and centering extensions keep working as before.
+when it opens and once per switch of setup, checked once it has settled
+(and placed again once if it did not stay there), and never corrected
+after that. Tiling and centering extensions keep working as before.
 
 Requires GNOME Shell 50.
 
@@ -131,6 +132,14 @@ tile it again. A pin made on a tiled window keeps that half too. Apps
 often resize a window on a workspace you are not looking at only once
 that workspace is shown; such a window is maximized vertically then.
 
+Every window window-pins moves (here, or when a new window opens) is
+checked once it is on the workspace that is shown and has not moved for
+a second. If it is not on its spot (some apps move or resize their
+windows again on their own), it is placed there once more; if it still
+does not stay, it is left where it is. Until it is found on its spot,
+where it is is not remembered: a window closed before then leaves the
+spot it was sent to.
+
 When a new window opens, window-pins waits until its title has settled
 (1 s without a change, at most 3 s after it is shown, because browsers and
 Electron apps change their title right after opening), so GNOME and other
@@ -150,8 +159,8 @@ extensions have placed it first. Then:
    most recently closed on a tie).
 4. Otherwise it stays where it opened.
 
-A window you start moving or resizing before it is placed is left where
-you put it.
+A window you start moving or resizing before it is placed, or before it
+was checked on its spot, is left where you put it.
 
 Only normal app windows are placed: dialogs, windows that skip the
 taskbar, popups and the desktop icons window are ignored.
@@ -187,7 +196,8 @@ shortcut is the `pin-window` key in the same schema.
 
 - `make test` runs the tests of the decision logic (setup keys, matching
   windows to pins and closed windows, rect conversion, settle timing,
-  state pruning), which has no GNOME Shell imports, with `gjs`.
+  checking placed windows, state pruning), which has no GNOME Shell
+  imports, with `gjs`.
 - `make test-nested` runs an end-to-end check in a headless GNOME Shell
   on its own D-Bus session, with virtual monitors turned on and off and
   hotplugged, and test windows. It needs `gst-launch-1.0` with the

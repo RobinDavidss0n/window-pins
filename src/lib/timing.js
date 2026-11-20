@@ -23,34 +23,21 @@ export const RECORD_DEBOUNCE_MS = 500;
 /** State is written to disk this long after the last change. */
 export const SAVE_DEBOUNCE_MS = 2000;
 
-/** A window moved to a spot where it is maximized in one direction gets
- * this long to arrive there, counted from when it is on the workspace
- * that is shown. */
+/** A window that was placed is checked once its frame has not changed for
+ * this long while it is on the workspace that is shown. Clients ack a new
+ * size within a frame or two; a client that moves or resizes the window
+ * again on its own does so right after (or right after its workspace is
+ * shown). */
+export const PLACED_QUIET_MS = 1000;
+
+/** ...but at the latest this long after the wait started counting, even if
+ * the frame keeps changing. The wait only starts counting once the window
+ * is on the workspace that is shown. */
 export const LAND_TIMEOUT_MS = 2000;
 
-/**
- * Next step of waiting for a moved window to arrive at a spot where it is
- * to be maximized in one direction.
- *
- * A Wayland client whose window is on a workspace that is not shown may
- * not ack its new size until that workspace is shown, so the timeout only
- * starts once the window is on the active workspace. Once started, it
- * runs to the end, even if the window is hidden again.
- *
- * @param {{landed: boolean, visible: boolean, timing: boolean}} state
- *   landed: the frame is at the target; visible: the window is on the
- *   active workspace (or on all of them); timing: the timeout runs
- * @returns {'apply'|'wait'|'start-timeout'|'defer'} apply: maximize it
- *   now; wait: keep waiting, the timeout runs; start-timeout: start the
- *   timeout; defer: keep waiting without a timeout
- */
-export function landingStep({landed, visible, timing}) {
-    if (landed)
-        return 'apply';
-    if (timing)
-        return 'wait';
-    return visible ? 'start-timeout' : 'defer';
-}
+/** How often a window is placed on its spot at most: the placement, and
+ * one more when the check finds it elsewhere. */
+export const PLACE_ATTEMPTS = 2;
 
 /**
  * Calls onDone once nothing has poked it for `quiet` ms, or `max` ms after
@@ -134,5 +121,97 @@ export class MonitorSettler {
 
     cancel() {
         this._timer.cancel();
+    }
+}
+
+/**
+ * Checks that a window window-pins placed stays on its spot, and places it
+ * again once when it does not.
+ *
+ * A Wayland client whose window is on a workspace that is not shown may
+ * not ack its new size until that workspace is shown, and some clients
+ * move or resize their window on their own right after it is placed. So
+ * the check waits until the window is on the workspace that is shown and
+ * its frame has been quiet for PLACED_QUIET_MS (at most LAND_TIMEOUT_MS
+ * once that wait has started; it then runs to the end, even if the window
+ * is hidden again). Until then there is no timeout.
+ *
+ * When the window is not on its spot, placeAgain() puts it there again
+ * and the wait starts over; when it misses again, the check gives up.
+ *
+ * Callbacks:
+ * - isVisible(): the window is on the shown workspace (or on all)
+ * - isAtSpot(): the window is on its spot
+ * - placeAgain(): place it again; returns applySpot's result
+ *   ('moved', 'already-there', or why it could not be placed)
+ * - onDeferred(): the wait is held back for a hidden workspace (once per
+ *   attempt)
+ * - onDone(outcome): 'confirmed' (on its spot), 'missed' (not on its spot
+ *   after the last attempt, or it could not be placed again)
+ */
+export class PlacementCheck {
+    /**
+     * @param {{add: Function, remove: Function}} timers
+     * @param {object} callbacks
+     */
+    constructor(timers, {isVisible, isAtSpot, placeAgain, onDeferred = () => {}, onDone}) {
+        this._isVisible = isVisible;
+        this._isAtSpot = isAtSpot;
+        this._placeAgain = placeAgain;
+        this._onDeferred = onDeferred;
+        this._onDone = onDone;
+        this._timer = new QuietTimer(timers, {
+            quiet: PLACED_QUIET_MS,
+            max: LAND_TIMEOUT_MS,
+            onDone: () => this._check(),
+        });
+        this.attempt = 1;
+        this.deferred = false;
+        this.active = true;
+    }
+
+    /** The window was placed, its frame, maximize state or workspace
+     * changed, or another workspace is shown. */
+    changed() {
+        if (!this.active)
+            return;
+        if (this._timer.active || this._isVisible()) {
+            this._timer.poke();
+        } else if (!this.deferred) {
+            this.deferred = true;
+            this._onDeferred();
+        }
+    }
+
+    _check() {
+        if (this._isAtSpot()) {
+            this._finish('confirmed');
+            return;
+        }
+        if (this.attempt >= PLACE_ATTEMPTS) {
+            this._finish('missed');
+            return;
+        }
+        this.attempt++;
+        this.deferred = false;
+        const result = this._placeAgain();
+        if (result === 'already-there')
+            this._finish('confirmed');
+        else if (result !== 'moved')
+            this._finish('missed');
+        else
+            this.changed();
+    }
+
+    _finish(outcome) {
+        this._timer.cancel();
+        this.active = false;
+        this._onDone(outcome);
+    }
+
+    /** Stop checking without calling onDone. */
+    cancel() {
+        this._timer.cancel();
+        this.active = false;
     }
 }
