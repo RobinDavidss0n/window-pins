@@ -1,12 +1,12 @@
 // Reading a window's spot and putting a window on a spot.
 
-import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
 import Shell from 'gi://Shell';
 
 import {isAppWindow} from '../lib/filter.js';
-import {landedAt, toAbsolute, toRelative, sameRect} from '../lib/geometry.js';
-import {LAND_TIMEOUT_MS, landingStep} from '../lib/timing.js';
+import {atSpot, landedAt, toAbsolute, toRelative, sameRect} from '../lib/geometry.js';
+import {PlacementCheck} from '../lib/timing.js';
+import {timers} from './timers.js';
 
 const BOTH = Meta.MaximizeFlags.BOTH;
 
@@ -95,138 +95,54 @@ function isAt(win, spot, monitor, target) {
     return sameRect(win.get_frame_rect(), target);
 }
 
-/** Waits of maximizePartlyAt still running, by window, so a new placement
- * of the window, a monitor change or disable can stop them. */
-const pendingWaits = new Map();
-
 /** Whether the window is on the workspace that is shown, or on all. */
 function onActiveWorkspace(win) {
     return win.located_on_workspace(global.workspace_manager.get_active_workspace());
 }
 
-/**
- * Maximize a window in one direction once its frame has arrived at
- * `target`. Maximizing in one direction keeps the frame's other
- * direction, so a half-tiled window comes back on its half. Doing it
- * before the move has landed (a Wayland client acks the new size later,
- * often only after a move to another monitor) would keep the old x and
- * width.
- *
- * When the frame does not arrive within LAND_TIMEOUT_MS, the window is
- * left where it is, not maximized. That time only starts counting once
- * the window is on the workspace that is shown: a Wayland client may not
- * ack a new size for a window on a hidden workspace until the workspace
- * is shown, which can be any time later. Until then the wait has no
- * timeout; it is dropped when the user grabs the window, the window is
- * placed again or unmanaged, the monitors change, or the extension is
- * disabled.
- *
- * Mutter has no public call for its edge-tile mode, so the window ends
- * up maximized vertically at half width rather than edge-tiled; it looks
- * the same, and Super+Left/Right tile it again.
- */
-function maximizePartlyAt(win, flags, target, log) {
-    if (landedAt(win.get_frame_rect(), target)) {
-        win.set_maximize_flags(flags);
-        return;
-    }
-    const wait = {ids: [], managerId: 0, timeoutId: 0, deferred: false};
-    const manager = global.workspace_manager;
-    const finish = apply => {
-        if (pendingWaits.get(win) === wait)
-            pendingWaits.delete(win);
-        for (const id of wait.ids)
-            win.disconnect(id);
-        wait.ids = [];
-        if (wait.managerId)
-            manager.disconnect(wait.managerId);
-        wait.managerId = 0;
-        if (wait.timeoutId)
-            GLib.source_remove(wait.timeoutId);
-        wait.timeoutId = 0;
-        if (apply)
-            win.set_maximize_flags(flags);
-    };
-    const startTimeout = () => {
-        wait.timeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, LAND_TIMEOUT_MS, () => {
-            wait.timeoutId = 0;
-            finish(false);
-            log?.(`${win.get_wm_class()} "${win.get_title()}" did not reach its spot; ` +
-                'left there without maximizing it in one direction');
-            return GLib.SOURCE_REMOVE;
-        });
-    };
-    const check = () => {
-        const step = landingStep({
-            landed: landedAt(win.get_frame_rect(), target),
-            visible: onActiveWorkspace(win),
-            timing: wait.timeoutId !== 0,
-        });
-        if (step === 'apply') {
-            finish(true);
-        } else if (step === 'start-timeout') {
-            startTimeout();
-        } else if (step === 'defer' && !wait.deferred) {
-            wait.deferred = true;
-            log?.(`${win.get_wm_class()} "${win.get_title()}" is on a hidden workspace; ` +
-                'will maximize it in one direction once that workspace is shown');
-        }
-    };
-
-    wait.cancel = () => finish(false);
-    wait.ids = [
-        win.connect('position-changed', check),
-        win.connect('size-changed', check),
-        // Whether the window is shown changes when it moves to another
-        // workspace, or another workspace is shown (below).
-        win.connect('workspace-changed', check),
-        win.connect('unmanaging', () => finish(false)),
-    ];
-    wait.managerId = manager.connect('active-workspace-changed', check);
-    pendingWaits.set(win, wait);
-    check();
-}
-
-/** Stop waiting for windows to arrive (the monitors change again, or the
- * extension is disabled). */
-export function cancelPendingPlacements() {
-    for (const wait of [...pendingWaits.values()])
-        wait.cancel();
+function describe(win) {
+    return `${win.get_wm_class()} "${win.get_title()}"`;
 }
 
 /**
- * The user started moving or resizing the window: a wait to maximize it
- * that is held back until its workspace is shown is dropped, so the
- * window is not changed under the user later. A wait whose timeout runs
- * goes on.
+ * Whether the window is on its spot, as the placement check sees it: the
+ * spot's monitor and maximize state, and the frame within landedAt's
+ * tolerance (not the workspace: the check runs once the window is on the
+ * shown workspace).
  */
-export function dropDeferredPlacement(win) {
-    const wait = pendingWaits.get(win);
-    if (wait?.deferred && !wait.timeoutId)
-        wait.cancel();
-}
-
-/**
- * Put the window on a spot of the current layout.
- *
- * @param {Meta.Window} win
- * @param {object} spot
- * @param {import('./monitors.js').Layout} layout
- * @param {Function|null} log debug log for what happens later
- * @returns {'moved'|'already-there'|'no-monitor'|'not-movable'}
- */
-export function applySpot(win, spot, layout, log = null) {
+function isOnSpot(win, spot, layout) {
     const monitor = layout.monitors.find(m => m.id === spot.monitor);
     if (!monitor)
-        return 'no-monitor';
-    // A wait from an earlier placement would maximize the window for that
-    // placement's spot.
-    pendingWaits.get(win)?.cancel();
+        return false;
+    return atSpot({
+        monitor: win.get_monitor(),
+        frame: win.get_frame_rect(),
+        maximized: win.get_maximize_flags(),
+        fullscreen: win.is_fullscreen(),
+    }, {
+        monitor: monitor.index,
+        target: toAbsolute(spot.rect, monitor.workArea),
+        maximized: spot.maximized,
+        fullscreen: spot.fullscreen,
+    });
+}
+
+/**
+ * Put the window on the spot.
+ *
+ * @returns {{result: 'moved'|'already-there'|'no-monitor'|'not-movable',
+ *   target?: object, maximizeLater?: number}} maximizeLater: maximize
+ *   flags to set once the frame has arrived at `target`
+ */
+function putOnSpot(win, spot, layout) {
+    const monitor = layout.monitors.find(m => m.id === spot.monitor);
+    if (!monitor)
+        return {result: 'no-monitor'};
     const target = toAbsolute(spot.rect, monitor.workArea);
     if (isAt(win, spot, monitor, target))
-        return 'already-there';
+        return {result: 'already-there'};
     if (!win.allows_move())
-        return 'not-movable';
+        return {result: 'not-movable'};
 
     let maximizeLater = 0;
     if (spot.fullscreen && win.is_fullscreen()) {
@@ -262,11 +178,143 @@ export function applySpot(win, spot, layout, log = null) {
         if (workspaceOf(win) !== index)
             win.change_workspace_by_index(index, false);
     }
-    // After the workspace change: whether the wait may time out depends on
-    // the window's workspace being shown.
-    if (maximizeLater)
-        maximizePartlyAt(win, maximizeLater, target, log);
-    return 'moved';
+    return {result: 'moved', target, maximizeLater};
+}
+
+/** Placements in flight, by window: placed, and not yet checked on their
+ * spot. */
+const placements = new Map();
+
+/**
+ * Follow a window that was just moved to its spot until the placement
+ * check (PlacementCheck) has found it on its spot, or given up.
+ *
+ * A window to be maximized in one direction is maximized once its frame
+ * has arrived at the target. Maximizing in one direction keeps the
+ * frame's other direction, so a half-tiled window comes back on its half.
+ * Doing it before the move has landed (a Wayland client acks the new size
+ * later, often only after a move to another monitor, or once the window's
+ * workspace is shown) would keep the old x and width. Mutter has no public
+ * call for its edge-tile mode, so the window ends up maximized vertically
+ * at half width rather than edge-tiled; it looks the same, and
+ * Super+Left/Right tile it again.
+ *
+ * The placement is dropped when the user grabs the window, the window is
+ * placed again or no longer followed, the monitors change, or the
+ * extension is disabled.
+ */
+function followPlacement(win, spot, layout, placed, {log, onDone}) {
+    const placement = {
+        target: placed.target,
+        maximizeLater: placed.maximizeLater,
+        ids: [],
+        managerId: 0,
+    };
+    const manager = global.workspace_manager;
+    const stop = () => {
+        if (placements.get(win) === placement)
+            placements.delete(win);
+        for (const id of placement.ids)
+            win.disconnect(id);
+        placement.ids = [];
+        if (placement.managerId)
+            manager.disconnect(placement.managerId);
+        placement.managerId = 0;
+    };
+    placement.check = new PlacementCheck(timers, {
+        isVisible: () => onActiveWorkspace(win),
+        isAtSpot: () => isOnSpot(win, spot, layout),
+        placeAgain: () => {
+            const r = win.get_frame_rect();
+            log?.(`${describe(win)} is not on its spot (at ${r.width}x${r.height}+${r.x}+${r.y}, ` +
+                `maximized ${win.get_maximize_flags()}); placing it again`);
+            // Flags left from the first try would be set for its target.
+            placement.maximizeLater = 0;
+            const again = putOnSpot(win, spot, layout);
+            placement.target = again.target;
+            placement.maximizeLater = again.maximizeLater ?? 0;
+            return again.result;
+        },
+        onDeferred: () => log?.(`${describe(win)} is on a hidden workspace; ` +
+            'will check it is on its spot once that workspace is shown'),
+        onDone: outcome => {
+            stop();
+            if (outcome === 'missed')
+                log?.(`${describe(win)} did not stay on its spot; left where it is`);
+            else if (placement.check.attempt > 1)
+                log?.(`${describe(win)} is on its spot after placing it again`);
+            onDone?.(outcome);
+        },
+    });
+    const changed = () => {
+        const flags = placement.maximizeLater;
+        if (flags && landedAt(win.get_frame_rect(), placement.target)) {
+            placement.maximizeLater = 0;
+            win.set_maximize_flags(flags);
+        }
+        placement.check.changed();
+    };
+    placement.cancel = () => {
+        placement.check.cancel();
+        stop();
+    };
+    placement.ids = [
+        win.connect('position-changed', changed),
+        win.connect('size-changed', changed),
+        // Whether the window is shown changes when it moves to another
+        // workspace, or another workspace is shown (below).
+        win.connect('workspace-changed', changed),
+    ];
+    placement.managerId = manager.connect('active-workspace-changed', changed);
+    placements.set(win, placement);
+    changed();
+}
+
+/**
+ * Whether a placement of the window is in flight: it was moved to a spot
+ * and not yet found there by the check (nor given up on). Where such a
+ * window is must not be taken as its spot.
+ */
+export function placementInFlight(win) {
+    return placements.has(win);
+}
+
+/** Drop the window's placement in flight, if any: the user grabbed it,
+ * pinned it, or it is no longer followed. */
+export function dropPlacement(win) {
+    placements.get(win)?.cancel();
+}
+
+/** Drop all placements in flight (the monitors change again, or the
+ * extension is disabled). */
+export function cancelPendingPlacements() {
+    for (const placement of [...placements.values()])
+        placement.cancel();
+}
+
+/**
+ * Put the window on a spot of the current layout. When it is moved, it is
+ * checked once it is on the shown workspace and its frame has been quiet,
+ * and placed again once if it is not on the spot (see PlacementCheck).
+ *
+ * @param {Meta.Window} win
+ * @param {object} spot
+ * @param {import('./monitors.js').Layout} layout
+ * @param {object} [options]
+ * @param {Function|null} [options.log] debug log for what happens later
+ * @param {Function|null} [options.onDone] called with 'confirmed' or
+ *   'missed' when the check of a moved window ends (not when the
+ *   placement is dropped)
+ * @returns {'moved'|'already-there'|'no-monitor'|'not-movable'}
+ */
+export function applySpot(win, spot, layout, {log = null, onDone = null} = {}) {
+    // A placement in flight would check the window against its earlier
+    // spot, or maximize it for that spot.
+    dropPlacement(win);
+    const placed = putOnSpot(win, spot, layout);
+    if (placed.result === 'moved')
+        followPlacement(win, spot, layout, placed, {log, onDone});
+    return placed.result;
 }
 
 /** Short human description of a spot, for the debug log. */

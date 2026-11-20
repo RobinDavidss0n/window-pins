@@ -4,11 +4,11 @@ import system from 'system';
 
 import {assignMonitorIds, defaultSetupName, logicalMonitorId, monitorBaseId, setupKeyOf}
     from '../src/lib/setup.js';
-import {landedAt, sameRect, toAbsolute, toRelative} from '../src/lib/geometry.js';
+import {atSpot, landedAt, sameRect, toAbsolute, toRelative} from '../src/lib/geometry.js';
 import {isAppWindow} from '../src/lib/filter.js';
 import {assignPins, chooseClosedSpot, decideNewWindow, exactTitlePinsSkipped, planRestore, titleSimilarity, titlesAlike}
     from '../src/lib/matching.js';
-import {MonitorSettler, QuietTimer, landingStep} from '../src/lib/timing.js';
+import {MonitorSettler, PlacementCheck, QuietTimer} from '../src/lib/timing.js';
 import {
     CLOSED_MAX_AGE_MS, addClosedEntries, closeStaleOpenWindows, emptyState, heldPinIds, newPinId,
     normalizeState, pruneState,
@@ -155,6 +155,24 @@ test('landedAt: exact position, size rounded to character cells', () => {
     eq(landedAt({x: 1920, y: 0, width: 630, height: 1020}, target), true);
     eq(landedAt({x: 1925, y: 0, width: 640, height: 1024}, target), false);
     eq(landedAt({x: 1920, y: 0, width: 400, height: 1024}, target), false);
+});
+
+test('atSpot: monitor, maximize state and, unless fully maximized, the frame', () => {
+    const target = {x: 1920, y: 0, width: 640, height: 1024};
+    const half = {monitor: 1, target, maximized: 2, fullscreen: false};
+    const win = (over = {}) => ({monitor: 1, frame: {...target}, maximized: 2, fullscreen: false, ...over});
+    eq(atSpot(win(), half), true);
+    eq(atSpot(win({frame: {...target, width: 630}}), half), true, 'size rounded:');
+    eq(atSpot(win({maximized: 0}), half), false, 'tile lost:');
+    eq(atSpot(win({monitor: 0}), half), false, 'other monitor:');
+    eq(atSpot(win({frame: {...target, x: 2000}}), half), false, 'moved:');
+    eq(atSpot(win({frame: {...target, width: 1280}}), half), false, 'resized:');
+    const full = {monitor: 1, target, maximized: 3, fullscreen: false};
+    eq(atSpot(win({maximized: 3, frame: {x: 1920, y: 32, width: 1280, height: 992}}), full), true);
+    eq(atSpot(win({maximized: 0}), full), false, 'not maximized:');
+    const fs = {monitor: 1, target, maximized: 0, fullscreen: true};
+    eq(atSpot(win({maximized: 0, fullscreen: true, frame: {x: 1920, y: 0, width: 1280, height: 1024}}), fs), true);
+    eq(atSpot(win({maximized: 0}), fs), false, 'not fullscreen:');
 });
 
 // --- filter.js --------------------------------------------------------------
@@ -417,21 +435,127 @@ test('monitor settler: one start and one settle per burst', () => {
     eq(events, ['start@0', 'settled@2900', 'start@2900', 'settled@4400']);
 });
 
-test('landing: a window that arrived is maximized, whatever else holds', () => {
-    for (const visible of [true, false]) {
-        for (const timing of [true, false])
-            eq(landingStep({landed: true, visible, timing}), 'apply', `visible ${visible}, timing ${timing}:`);
+// A placed window as PlacementCheck sees it.
+function placed(t, {visible = true, atSpot: at = true, again = 'moved'} = {}) {
+    const w = {visible, at, again, events: [], placedAgain: 0};
+    w.check = new PlacementCheck(t, {
+        isVisible: () => w.visible,
+        isAtSpot: () => w.at,
+        placeAgain: () => {
+            w.placedAgain++;
+            w.events.push(`again@${t.now}`);
+            return typeof w.again === 'function' ? w.again() : w.again;
+        },
+        onDeferred: () => w.events.push(`deferred@${t.now}`),
+        onDone: outcome => w.events.push(`${outcome}@${t.now}`),
+    });
+    return w;
+}
+
+test('placement check: a window on the shown workspace is checked after 1 s of quiet', () => {
+    const t = new FakeTimers();
+    const w = placed(t);
+    w.check.changed();
+    t.advance(600);
+    w.check.changed(); // the client acks its new size
+    t.advance(5000);
+    eq(w.events, ['confirmed@1600']);
+});
+
+test('placement check: a frame that keeps changing is checked 2 s after the wait started', () => {
+    const t = new FakeTimers();
+    const w = placed(t);
+    w.check.changed();
+    for (let i = 0; i < 10; i++) {
+        t.advance(300);
+        w.check.changed();
     }
+    eq(w.events, ['confirmed@2000']);
 });
 
-test('landing: the timeout starts only once the window is on the shown workspace', () => {
-    eq(landingStep({landed: false, visible: true, timing: false}), 'start-timeout');
-    eq(landingStep({landed: false, visible: false, timing: false}), 'defer');
+test('placement check: held back without a timeout while the workspace is hidden', () => {
+    const t = new FakeTimers();
+    const w = placed(t, {visible: false});
+    w.check.changed();
+    t.advance(60000);
+    w.check.changed();
+    eq(w.events, ['deferred@0'], 'hidden for a minute:');
+    w.visible = true;
+    w.check.changed(); // its workspace is shown
+    t.advance(5000);
+    eq(w.events, ['deferred@0', 'confirmed@61000']);
 });
 
-test('landing: a running timeout goes on, also when the window is hidden again', () => {
-    eq(landingStep({landed: false, visible: true, timing: true}), 'wait');
-    eq(landingStep({landed: false, visible: false, timing: true}), 'wait');
+test('placement check: once started, the wait runs to the end when hidden again', () => {
+    const t = new FakeTimers();
+    const w = placed(t);
+    w.check.changed();
+    w.visible = false;
+    t.advance(500);
+    w.check.changed();
+    t.advance(5000);
+    eq(w.events, ['confirmed@1500']);
+});
+
+test('placement check: off its spot, placed again once, then confirmed', () => {
+    const t = new FakeTimers();
+    const w = placed(t, {atSpot: false, again: () => {
+        w.at = true;
+        return 'moved';
+    }});
+    w.check.changed();
+    t.advance(5000);
+    eq(w.events, ['again@1000', 'confirmed@2000']);
+});
+
+test('placement check: off its spot twice, placed again only once, then given up', () => {
+    const t = new FakeTimers();
+    const w = placed(t, {atSpot: false});
+    w.check.changed();
+    t.advance(10000);
+    eq(w.events, ['again@1000', 'missed@2000']);
+    eq(w.check.active, false);
+});
+
+test('placement check: placed again onto a hidden workspace waits for it again', () => {
+    const t = new FakeTimers();
+    const w = placed(t, {atSpot: false, again: () => {
+        w.visible = false;
+        return 'moved';
+    }});
+    w.check.changed();
+    t.advance(10000);
+    eq(w.events, ['again@1000', 'deferred@1000']);
+    w.at = true;
+    w.visible = true;
+    w.check.changed();
+    t.advance(5000);
+    eq(w.events, ['again@1000', 'deferred@1000', 'confirmed@11000']);
+});
+
+test('placement check: placing again finds it there, or cannot place it', () => {
+    let t = new FakeTimers();
+    let w = placed(t, {atSpot: false, again: 'already-there'});
+    w.check.changed();
+    t.advance(5000);
+    eq(w.events, ['again@1000', 'confirmed@1000']);
+    t = new FakeTimers();
+    w = placed(t, {atSpot: false, again: 'not-movable'});
+    w.check.changed();
+    t.advance(5000);
+    eq(w.events, ['again@1000', 'missed@1000']);
+});
+
+test('placement check: cancelled, it never checks or calls back', () => {
+    const t = new FakeTimers();
+    const w = placed(t, {atSpot: false});
+    w.check.changed();
+    t.advance(500);
+    w.check.cancel();
+    w.check.changed();
+    t.advance(10000);
+    eq(w.events, []);
+    eq(w.check.active, false);
 });
 
 // --- state.js ---------------------------------------------------------------

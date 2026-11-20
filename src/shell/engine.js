@@ -1,9 +1,11 @@
 // The core: follows windows and the monitor layout, records where windows
 // are per setup, and places windows on pins and remembered spots.
 //
-// It never corrects a window after placing it: a window is placed once
-// when it opens, and once per switch to another setup. Moves by the user,
-// GNOME or other extensions in between are recorded, not undone.
+// A window is placed once when it opens, and once per switch to another
+// setup. A placed window is checked once it has settled on the shown
+// workspace and placed again once if it is not on its spot. Apart from
+// that it is never corrected: moves by the user, GNOME or other
+// extensions are recorded, not undone.
 
 import {decideNewWindow, exactTitlePinsSkipped, planRestore} from '../lib/matching.js';
 import {defaultSetupName} from '../lib/setup.js';
@@ -18,7 +20,7 @@ import {readLayout, refreshWorkAreas} from './monitors.js';
 import {shellInstanceId} from './store.js';
 import {timers} from './timers.js';
 import {
-    applySpot, appNameOf, cancelPendingPlacements, describeSpot, dropDeferredPlacement, isTrackable,
+    applySpot, appNameOf, cancelPendingPlacements, describeSpot, dropPlacement, isTrackable,
     readSpot, windowKey,
 } from './windows.js';
 
@@ -104,16 +106,16 @@ export class Engine {
                 refreshWorkAreas(this._layout);
         });
         // A new window the user starts moving or resizing before it is
-        // placed stays where the user puts it. A window on a hidden
-        // workspace that still waits to be maximized in one direction is
-        // then not maximized later.
+        // placed stays where the user puts it. A placed window the user
+        // grabs before it was found on its spot is not checked or placed
+        // again.
         this._connect(global.display, 'grab-op-begin', (_d, win) => {
             if (!win)
                 return;
             const entry = this._windows.get(windowKey(win));
             if (entry?.phase === 'waiting')
                 entry.grabbed = true;
-            dropDeferredPlacement(win);
+            dropPlacement(win);
         });
         this._connect(global.display, 'notify::focus-window', () => {
             const win = global.display.focus_window;
@@ -144,8 +146,8 @@ export class Engine {
         this._saveTimer.cancel();
     }
 
-    _apply(win, spot) {
-        return applySpot(win, spot, this._layout, message => this._log.debug(message));
+    _apply(entry, spot) {
+        return applySpot(entry.win, spot, this._layout, {log: message => this._log.debug(message)});
     }
 
     // --- Following windows -------------------------------------------------
@@ -226,6 +228,7 @@ export class Engine {
     _untrack(entry) {
         entry.waiter?.cancel();
         entry.recordTimer.cancel();
+        dropPlacement(entry.win);
         for (const id of entry.signalIds)
             entry.win.disconnect(id);
         if (entry.shownId)
@@ -297,8 +300,9 @@ export class Engine {
         this._log.debug('monitor layout changing; recording paused');
         for (const entry of this._windows.values())
             entry.recordTimer.cancel();
-        // Waits for windows to land on spots of the layout that is going
-        // away; the restore after the change places windows for the new one.
+        // Placements in flight check windows against spots of the layout
+        // that is going away; the restore after the change places windows
+        // for the new one.
         cancelPendingPlacements();
     }
 
@@ -330,7 +334,7 @@ export class Engine {
             const entry = this._windows.get(item.key);
             if (item.kind === 'pin')
                 this._memoryOf(entry).pins[setupKey] = item.pin.id;
-            const result = this._apply(entry.win, item.spot);
+            const result = this._apply(entry, item.spot);
             const why = item.kind === 'pin' ? 'its pin' : 'where it was last in this setup';
             this._log.debug(`${result}: ${describeWindow(entry.win)} -> ` +
                 `${describeSpot(item.spot, this._layout)} (${why})`);
@@ -452,13 +456,13 @@ export class Engine {
             this._logExactTitleSkips(win, held);
         if (decision?.kind === 'pin') {
             this._memoryOf(entry).pins[setupKey] = decision.pin.id;
-            const result = this._apply(win, decision.pin);
+            const result = this._apply(entry, decision.pin);
             const how = decision.pin.title === win.get_title()
                 ? 'same title' : 'free pin of the app with the most similar title';
             this._log.debug(`new ${describeWindow(win)}: ${result} -> ` +
                 `${describeSpot(decision.pin, this._layout)} (pin "${decision.pin.title}", ${how})`);
         } else if (decision?.kind === 'closed') {
-            const result = this._apply(win, decision.entry);
+            const result = this._apply(entry, decision.entry);
             this._log.debug(`new ${describeWindow(win)}: ${result} -> ` +
                 `${describeSpot(decision.entry, this._layout)} ` +
                 `(closed window "${decision.entry.title}")`);
@@ -559,6 +563,8 @@ export class Engine {
         if (!wmClass)
             return null;
         const entry = this._track(win, 'tracked');
+        // Pinned where it is now: a placement in flight would move it away.
+        dropPlacement(win);
         if (entry.phase === 'waiting') {
             // Pinned before it was placed: it stays where the user has it.
             entry.waiter.cancel();

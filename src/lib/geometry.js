@@ -95,3 +95,30 @@ export function landedAt(frame, target) {
         Math.abs(frame.width - target.width) <= 16 &&
         Math.abs(frame.height - target.height) <= 16;
 }
+
+/** Meta.MaximizeFlags.BOTH: maximized in both directions. */
+const MAXIMIZED_BOTH = 3;
+
+/**
+ * Whether a window is at the spot it was placed on: on the spot's monitor,
+ * fullscreen and maximized as the spot is, and, unless it is fullscreen or
+ * maximized in both directions (then the frame is the whole monitor or
+ * work area), with its frame at the target rect (landedAt). A window
+ * maximized in one direction keeps the frame it was tiled with, so that
+ * frame is compared too.
+ *
+ * @param {{monitor: number, frame: Rect, maximized: number, fullscreen: boolean}} actual
+ *   the window: monitor index, frame in stage coordinates, maximize flags
+ * @param {{monitor: number, target: Rect, maximized: number, fullscreen: boolean}} wanted
+ *   the spot: monitor index, rect in stage coordinates, maximize flags
+ * @returns {boolean}
+ */
+export function atSpot(actual, wanted) {
+    if (actual.monitor !== wanted.monitor ||
+        actual.fullscreen !== wanted.fullscreen ||
+        actual.maximized !== wanted.maximized)
+        return false;
+    if (wanted.fullscreen || wanted.maximized === MAXIMIZED_BOTH)
+        return true;
+    return landedAt(actual.frame, wanted.target);
+}
