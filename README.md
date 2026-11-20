@@ -23,10 +23,12 @@ setup.
   switch it on for, a window that closes leaves its places behind, and
   the next window of that app opens there.
 
-It never fights other extensions or the user: a window is placed once
+It does not fight other extensions or the user: a window is placed once
 when it opens and once per switch of setup, checked once it has settled
 (and placed again once if it did not stay there), and never corrected
-after that. Tiling and centering extensions keep working as before.
+after that. A move by a shortcut or another extension in the second or
+two before that check is undone once; a mouse drag is not. Tiling and
+centering extensions keep working as before.
 
 Requires GNOME Shell 50.
 
@@ -159,8 +161,8 @@ extensions have placed it first. Then:
    most recently closed on a tie).
 4. Otherwise it stays where it opened.
 
-A window you start moving or resizing before it is placed, or before it
-was checked on its spot, is left where you put it.
+A window you start moving or resizing with the mouse before it is
+placed, or before it was checked on its spot, is left where you put it.
 
 Only normal app windows are placed: dialogs, windows that skip the
 taskbar, popups and the desktop icons window are ignored.
